@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Electron Remote Assist Demo</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+    }
+
+    .container {
+      background: #ffffff;
+      padding: 32px 40px;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      width: 360px;
+      margin: 40px auto;
+    }
+
+    h1 {
+      margin-top: 0;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    label {
+      font-weight: 600;
+      margin-top: 10px;
+      display: block;
+      text-align: left;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px;
+      margin-top: 6px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    /* --- Custom dropdown styles --- */
+    .dropdown {
+      position: relative;
+      margin-top: 6px;
+      width: 100%;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 14px;
+      background: #fff;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+
+    .dropdown:focus {
+      outline: 2px solid #0066ff;
+      outline-offset: 2px;
+    }
+
+    .dropdown-selected {
+      padding: 10px;
+      user-select: none;
+    }
+
+    .dropdown-menu {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 100%;
+      margin-top: 2px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+      z-index: 1000;
+      display: none;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .dropdown-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .dropdown-item:hover,
+    .dropdown-item.highlight {
+      background: #eef4ff;
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 12px;
+      background-color: #0066ff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #0053d6;
+    }
+
+    .button-secondary {
+      background-color: #777;
+    }
+
+    .button-secondary:hover {
+      background-color: #555;
+    }
+
+    .result-container {
+      background: #eef4ff;
+      border-radius: 10px;
+      padding: 15px;
+      margin-top: 25px;
+      display: none;
+    }
+
+    .result-container h3 {
+      margin-top: 0;
+      margin-bottom: 10px;
+    }
+
+    .result-item {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+
+    .remote-status {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #555;
+    }
+
+    /* tiny debug dot to visualize where we inject mouse events */
+    #remote-debug-dot {
+      position: fixed;
+      width: 8px;
+      height: 8px;
+      background: red;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 99999;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>User Information</h1>
+
+    <label for="firstName">First Name</label>
+    <input id="firstName" type="text" placeholder="Enter First Name" />
+
+    <label for="lastName">Last Name</label>
+    <input id="lastName" type="text" placeholder="Enter Last Name" />
+
+    <!-- --- REPLACED NATIVE SELECT WITH CUSTOM DROPDOWN --- -->
+    <label for="sexDropdown">Sex</label>
+    <div id="sexDropdown" class="dropdown" tabindex="0">
+      <div id="sexSelected" class="dropdown-selected">Select Sex</div>
+      <div id="sexMenu" class="dropdown-menu">
+        <div class="dropdown-item" data-value="Male">Male</div>
+        <div class="dropdown-item" data-value="Female">Female</div>
+        <div class="dropdown-item" data-value="Other">Other</div>
+      </div>
+    </div>
+    <!-- hidden field to keep the same API for submitForm() -->
+    <input type="hidden" id="sex" value="" />
+    <!-- ----------------------------------------------- -->
+
+    <button onclick="submitForm()">Submit</button>
+
+    <div class="result-container" id="resultBox">
+      <h3>Submitted Details</h3>
+      <div class="result-item" id="res-fname"></div>
+      <div class="result-item" id="res-lname"></div>
+      <div class="result-item" id="res-sex"></div>
+    </div>
+
+    <hr style="
+          margin-top: 25px;
+          margin-bottom: 10px;
+          border: none;
+          border-top: 1px solid #eee;
+        " />
+
+    <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
+    <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
+      Stop Remote Assist
+    </button>
+    <div class="remote-status" id="remoteStatus">Remote assist is not active.</div>
+  </div>
+
+  <div id="remote-debug-dot"></div>
+
+  <script>
+    const electron = require('electron');
+    const { ipcRenderer } = electron;
+    const io = require('socket.io-client');
+
+    console.log('electron keys in renderer:', Object.keys(electron));
+
+    // signaling server
+    const socket = io('http://localhost:4000');
+
+    const sessionId = 'demo-session-1';
+
+    let pc = null;
+
+    let localStream = null;
+
+    // Full window bounds (titlebar + content), DIP
+    let windowWidth = null;
+    let windowHeight = null;
+
+    // Content bounds (what sendInputEvent uses), DIP
+    let contentWidth = null;
+    let contentHeight = null;
+
+    // Offset from window top to content top (titlebar height)
+    let windowOffsetTop = 0;
+
+    // Focus priming
+    let isPrimed = false;
+
+    let debugDot = null;
+    function ensureDebugDot() {
+      if (!debugDot) {
+        debugDot = document.getElementById('remote-debug-dot');
+      }
+      return debugDot;
+    }
+
+    function createPeerConnection() {
+      const newPc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      newPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+        }
+      };
+
+      return newPc;
+    }
+
+    // ---------------------------
+    // Custom dropdown wiring
+    // ---------------------------
+    const sexHiddenInput = document.getElementById('sex');
+    const sexDropdown = document.getElementById('sexDropdown');
+    const sexSelected = document.getElementById('sexSelected');
+    const sexMenu = document.getElementById('sexMenu');
+    const sexItems = Array.from(sexMenu.querySelectorAll('.dropdown-item'));
+
+    let sexOpen = false;
+    let sexHighlightIndex = -1;
+
+    function openSexDropdown() {
+      sexMenu.style.display = 'block';
+      sexOpen = true;
+      highlightSexItem(0); // default highlight first option
+    }
+
+    function closeSexDropdown() {
+      sexMenu.style.display = 'none';
+      sexOpen = false;
+      clearSexHighlight();
+    }
+
+    function setSex(value, label) {
+      sexHiddenInput.value = value;
+      sexSelected.textContent = label;
+      closeSexDropdown();
+    }
+
+    function clearSexHighlight() {
+      sexHighlightIndex = -1;
+      sexItems.forEach(item => item.classList.remove('highlight'));
+    }
+
+    function highlightSexItem(index) {
+      if (index < 0 || index >= sexItems.length) return;
+      sexHighlightIndex = index;
+      sexItems.forEach((item, i) => {
+        item.classList.toggle('highlight', i === sexHighlightIndex);
+      });
+    }
+
+    // Toggle on click
+    sexDropdown.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!sexOpen) {
+        openSexDropdown();
+      } else {
+        closeSexDropdown();
+      }
+    });
+
+    // Select by clicking an item
+    sexItems.forEach((item, index) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const value = item.dataset.value;
+        const label = item.textContent;
+        setSex(value, label);
+      });
+    });
+
+    // Close dropdown if clicking outside
+    document.addEventListener('click', () => {
+      if (sexOpen) {
+        closeSexDropdown();
+      }
+    });
+
+    // Keyboard navigation when dropdown has focus
+    sexDropdown.addEventListener('keydown', (e) => {
+      if (!sexOpen && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+        // open on first key press
+        openSexDropdown();
+        e.preventDefault();
+        return;
+      }
+
+      if (!sexOpen) {
+        return; // ignore other keys if closed
+      }
+
+      switch (e.key) {
+        case 'ArrowDown': {
+          const next = sexHighlightIndex < sexItems.length - 1 ? sexHighlightIndex + 1 : sexItems.length - 1;
+          highlightSexItem(next);
+          e.preventDefault();
+          break;
+        }
+        case 'ArrowUp': {
+          const prev = sexHighlightIndex > 0 ? sexHighlightIndex - 1 : 0;
+          highlightSexItem(prev);
+          e.preventDefault();
+          break;
+        }
+        case 'Enter': {
+          if (sexHighlightIndex >= 0) {
+            const item = sexItems[sexHighlightIndex];
+            const value = item.dataset.value;
+            const label = item.textContent;
+            setSex(value, label);
+          }
+          e.preventDefault();
+          break;
+        }
+        case 'Escape': {
+          closeSexDropdown();
+          e.preventDefault();
+          break;
+        }
+        default:
+          break;
+      }
+    });
+
+    // ---------------------------
+    // Existing form & remote code
+    //----------------------------
+    function submitForm() {
+      const firstName = document.getElementById('firstName').value.trim();
+      const lastName = document.getElementById('lastName').value.trim();
+      const sex = document.getElementById('sex').value; // now from hidden input
+
+      if (!firstName || !lastName || !sex) {
+        alert('Please fill all fields.');
+        return;
+      }
+
+      document.getElementById('res-fname').innerText = 'First Name: ' + firstName;
+      document.getElementById('res-lname').innerText = 'Last Name: ' + lastName;
+      document.getElementById('res-sex').innerText = 'Sex: ' + sex;
+      document.getElementById('resultBox').style.display = 'block';
+    }
+
+    async function getAppWindowStream() {
+      const sourceId = await ipcRenderer.invoke('get-app-window-source-id');
+
+      if (!sourceId) {
+        alert('Could not find app window source. Check window title.');
+        throw new Error('App window source not found');
+      }
+
+      console.log('Using sourceId from main:', sourceId);
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId
+          }
+        }
+      });
+
+      return stream;
+    }
+
+    async function startRemoteAssist() {
+      document.getElementById('remoteStatus').innerText = 'Starting remote assist...';
+
+      // NEW: create a fresh peer connection
+      pc = createPeerConnection();
+      // 1) identify as customer
+      socket.emit('register', { role: 'customer', sessionId });
+
+      // 2) get app-only window stream (for video)
+      localStream = await getAppWindowStream();
+
+      // 3) query window + content geometry from main (all in DIP)
+      const winBounds = await ipcRenderer.invoke('get-window-bounds');
+      windowWidth = winBounds.width;
+      windowHeight = winBounds.height;
+
+      const content = await ipcRenderer.invoke('get-content-bounds');
+      contentWidth = content.width;
+      contentHeight = content.height;
+
+      const offsetInfo = await ipcRenderer.invoke('get-window-offset');
+      windowOffsetTop = offsetInfo.offsetTop || 0;
+
+      console.log('CLIENT: window bounds:', winBounds);
+      console.log('CLIENT: content bounds:', content);
+      console.log('CLIENT: windowOffsetTop:', windowOffsetTop);
+
+      // 4) Tell agent the FULL WINDOW size (what the video actually shows)
+      socket.emit('app-dimensions', {
+        sessionId,
+        width: windowWidth,
+        height: windowHeight
+      });
+
+      // 5) add tracks
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      // 6) ICE
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+        }
+      };
+
+      // 7) offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('offer', { sessionId, offer });
+
+      // 8) UI
+      document.getElementById('startRemoteBtn').disabled = true;
+      document.getElementById('stopRemoteBtn').disabled = false;
+      document.getElementById('remoteStatus').innerText =
+        'Remote assist started. Support can now see your app window.';
+    }
+
+    function stopRemoteAssist() {
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+
+      if (pc) {
+        try { pc.getSenders().forEach(sender => pc.removeTrack(sender)); } catch {}
+        try { pc.close(); } catch {}
+        pc = null;
+      }
+
+      document.getElementById('startRemoteBtn').disabled = false;
+      document.getElementById('stopRemoteBtn').disabled = true;
+      document.getElementById('remoteStatus').innerText = 'Remote assist stopped.';
+    }
+
+    socket.on('answer', async ({ answer }) => {
+      if (!pc) return;
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('ice-candidate', async ({ candidate }) => {
+      if (!pc) return;
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error adding ICE candidate', e);
+      }
+    });
+
+    function handleRemoteKeyboard(ev) {
+      console.log('CLIENT: incoming keyboard event:', ev);
+
+      // Which element currently has focus in the Electron window?
+      const active = document.activeElement;
+      if (!active) return;
+
+      // Recreate a DOM KeyboardEvent so any element-specific handlers (like the
+      // custom dropdown) still work normally.
+      const eventType = ev.subtype === 'keyDown' ? 'keydown' : 'keyup';
+      const domEvent = new KeyboardEvent(eventType, {
+        key: ev.key,
+        code: ev.code,
+        altKey: ev.altKey,
+        shiftKey: ev.shiftKey,
+        ctrlKey: ev.ctrlKey,
+        metaKey: ev.metaKey,
+        bubbles: true,
+        cancelable: true
+      });
+
+      // Dispatch to the focused element so dropdown key navigation etc. works.
+      active.dispatchEvent(domEvent);
+
+      // Only mutate text on keyDown, not keyUp.
+      if (eventType !== 'keydown') return;
+
+      // Let the custom dropdown handle its own key logic.
+      if (active.id === 'sexDropdown') {
+        return;
+      }
+
+      const tag = active.tagName.toLowerCase();
+      if (tag !== 'input' && tag !== 'textarea') {
+        // Don't try to type into non-text elements.
+        return;
+      }
+
+      const value = active.value;
+      const start = active.selectionStart ?? value.length;
+      const end = active.selectionEnd ?? value.length;
+
+      const setValueAndCaret = (newValue, newPos) => {
+        active.value = newValue;
+        active.selectionStart = active.selectionEnd = newPos;
+      };
+
+      // Printable characters (ignore modifier combos like Ctrl+C).
+      if (ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        const before = value.slice(0, start);
+        const after = value.slice(end);
+        const newValue = before + ev.key + after;
+        const newPos = start + ev.key.length;
+        setValueAndCaret(newValue, newPos);
+        return;
+      }
+
+      // Handle basic editing/navigation keys.
+      switch (ev.key) {
+        case 'Backspace': {
+          if (start === end && start > 0) {
+            const before = value.slice(0, start - 1);
+            const after = value.slice(end);
+            setValueAndCaret(before + after, start - 1);
+          } else if (start !== end) {
+            const before = value.slice(0, start);
+            const after = value.slice(end);
+            setValueAndCaret(before + after, start);
+          }
+          break;
+        }
+
+        case 'Delete': {
+          if (start === end && start < value.length) {
+            const before = value.slice(0, start);
+            const after = value.slice(start + 1);
+            setValueAndCaret(before + after, start);
+          } else if (start !== end) {
+            const before = value.slice(0, start);
+            const after = value.slice(end);
+            setValueAndCaret(before + after, start);
+          }
+          break;
+        }
+
+        case 'ArrowLeft': {
+          const newPos = Math.max(0, start - 1);
+          active.selectionStart = active.selectionEnd = newPos;
+          break;
+        }
+
+        case 'ArrowRight': {
+          const newPos = Math.min(value.length, end + 1);
+          active.selectionStart = active.selectionEnd = newPos;
+          break;
+        }
+
+        case 'Home': {
+          active.selectionStart = active.selectionEnd = 0;
+          break;
+        }
+
+        case 'End': {
+          active.selectionStart = active.selectionEnd = value.length;
+          break;
+        }
+
+        default:
+          // ignore other special keys here
+          break;
+      }
+    }
+    // Mouse events from agent (in window coords) → content coords
+    socket.on('control-event', ({ event }) => {
+      if (event.type === 'keyboard') {
+        handleRemoteKeyboard(event);
+        return;
+      }
+
+      if (event.type !== 'mouse') return;
+
+      // mouse handling as you already have it
+      if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
+        console.warn('CLIENT: missing geometry, ignoring mouse event');
+        return;
+      }
+
+      const winX = event.x;
+      const winY = event.y;
+
+      const adjX = winX;
+      const adjY = winY - windowOffsetTop;
+
+      const adjusted = {
+        type: event.type,
+        subtype: event.subtype,
+        x: adjX,
+        y: adjY,
+        button: event.button || 'left'
+      };
+
+      console.log('CLIENT: incoming mouse (window coords):', event);
+      console.log('CLIENT: adjusted for content coords:', adjusted);
+
+      if (!isPrimed) {
+        console.log('CLIENT: priming focus with first mouse event');
+        ipcRenderer.send('focus-window');
+        isPrimed = true;
+        return;
+      }
+
+      const dot = ensureDebugDot();
+      dot.style.left = adjX - 4 + 'px';
+      dot.style.top = adjY - 4 + 'px';
+      dot.style.display = 'block';
+
+      ipcRenderer.send('remote-control-event', adjusted);
+    });
+    // expose for buttons
+    window.submitForm = submitForm;
+    window.startRemoteAssist = startRemoteAssist;
+    window.stopRemoteAssist = stopRemoteAssist;
+  </script>
+</body>
+
+</html>
