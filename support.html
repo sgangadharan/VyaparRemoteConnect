@@ -47,7 +47,25 @@
       // const socket = io('http://192.168.137.102:4000'); // adjust IP if needed
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:global.relay.metered.ca:80',
+            username: 'openai',     // any username works on this public demo relay
+            credential: 'openai'    // any password works
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: 'openai',
+            credential: 'openai'
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:443?transport=tcp',
+            username: 'openai',
+            credential: 'openai'
+          }
+        ]
       });
 
       // FULL WINDOW size (DIP)

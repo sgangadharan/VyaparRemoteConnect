@@ -212,7 +212,8 @@
     console.log('electron keys in renderer:', Object.keys(electron));
 
     // signaling server
-    const socket = io('http://localhost:4000');
+    //const socket = io('http://localhost:4000');
+    const socket = io('http://135.13.10.157/:4000');
 
     const sessionId = 'demo-session-1';
 
@@ -244,7 +245,25 @@
 
     function createPeerConnection() {
       const newPc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: 'turn:global.relay.metered.ca:80',
+            username: 'openai',     // any username works on this public demo relay
+            credential: 'openai'    // any password works
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:443',
+            username: 'openai',
+            credential: 'openai'
+          },
+          {
+            urls: 'turn:global.relay.metered.ca:443?transport=tcp',
+            username: 'openai',
+            credential: 'openai'
+          }
+        ]
       });
 
       newPc.onicecandidate = (event) => {

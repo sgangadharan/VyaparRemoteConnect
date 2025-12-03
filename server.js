@@ -17,8 +17,9 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname)));
 
 // Simple root route (optional)
-app.get('/', (req, res) => {
-  res.send('<h1>Signaling server running</h1><p>Open /support.html for agent UI.</p>');
+// 
+app.get('/support.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'support.html'));
 });
 
 // --- Signaling logic (same as before) ---
