@@ -200,14 +200,20 @@
       type="text"
       placeholder="e.g. customer-123"
     />
-    <label>
-      <input type="radio" name="captureMode" value="window" checked />
-      Share this app window only
-    </label>
-    <label>
-      <input type="radio" name="captureMode" value="desktop" />
-      Share entire desktop
-    </label>
+    
+    <!-- NEW: capture mode selector -->
+    <div style="margin-top: 12px; font-size: 14px;">
+      <strong>Share mode:</strong><br />
+      <label>
+        <input type="radio" name="captureMode" value="window" checked />
+        This app window only
+      </label><br />
+      <label>
+        <input type="radio" name="captureMode" value="desktop" />
+        Entire desktop (screen)
+      </label>
+    </div>
+    
     <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
     <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
       Stop Remote Assist
@@ -466,8 +472,8 @@
       return stream;
     }
 
+    // NEW: capture entire desktop (screen) instead of just this window
     async function getDesktopStream() {
-      // Ask main for a SCREEN sourceId
       const sourceId = await ipcRenderer.invoke('get-desktop-source-id');
 
       if (!sourceId) {
@@ -490,6 +496,7 @@
       return stream;
     }
 
+
     async function startRemoteAssist() {
       document.getElementById('remoteStatus').innerText = 'Starting remote assist...';
 
@@ -508,9 +515,12 @@
       // 2) get app-only window stream (for video)
       // 🔽 Decide what to capture
       const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
+
       if (mode === 'desktop') {
+        console.log('CLIENT: capturing entire desktop');
         localStream = await getDesktopStream();
       } else {
+        console.log('CLIENT: capturing app window only');
         localStream = await getAppWindowStream();
       }
       

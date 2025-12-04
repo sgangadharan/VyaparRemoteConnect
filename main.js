@@ -57,6 +57,21 @@ ipcMain.handle('get-app-window-source-id', async () => {
   return src ? src.id : null;
 });
 
+// Used by renderer to find a SCREEN source (entire desktop)
+ipcMain.handle('get-desktop-source-id', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 400, height: 300 }
+  });
+
+  console.log('desktopCapturer screen sources:', sources.map(s => ({ id: s.id, name: s.name }))
+  );
+
+  // Simple: pick the first screen (primary). For multi-monitor UI you can expose these to the user.
+  const primaryScreen = sources[0];
+  return primaryScreen ? primaryScreen.id : null;
+});
+
 // Full window bounds (what the captured video shows)
 ipcMain.handle('get-window-bounds', () => {
   if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
@@ -107,23 +122,6 @@ ipcMain.on('remote-control-event', (event, data) => {
     });
 
   } 
-});
-
-// Used by renderer to find a SCREEN source (entire desktop)
-ipcMain.handle('get-desktop-source-id', async () => {
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],   // 👈 screen instead of window
-    thumbnailSize: { width: 400, height: 300 }
-  });
-
-  console.log('desktopCapturer screen sources:', sources.map(s => ({
-    id: s.id,
-    name: s.name
-  })));
-
-  // Simple approach: pick the first screen
-  const primaryScreen = sources[0];
-  return primaryScreen ? primaryScreen.id : null;
 });
 
 // Mouse injection (content coordinates)
