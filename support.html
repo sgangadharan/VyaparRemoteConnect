@@ -52,7 +52,8 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
       // Dynamic session ID, set after Join Session
-      let sessionId = null;
+      let sessionId = null;       // change from const → let
+      let sessionActive = false;  // new flag
 
       // If support.html is served from the same host/port as server.js (4000):
       const socket = io(); // auto-connects to current origin
@@ -99,6 +100,7 @@
           return;
         }
         sessionId = key;
+        sessionActive = true;
         console.log('AGENT: joining session', sessionId);
         socket.emit('register', { role: 'agent', sessionId });
       }
@@ -149,6 +151,26 @@
         }
       });
 
+      socket.on('session-ended', ({ sessionId: endedId, reason }) => {
+        console.log('AGENT: session ended by client:', endedId, reason);
+        sessionActive = false;
+
+        try {
+          if (pc) {
+            pc.getSenders().forEach(s => pc.removeTrack(s));
+            pc.close();
+          }
+        } catch (e) {
+          console.error('AGENT: error closing peer connection after session end', e);
+        }
+
+        pc = null;
+        video.srcObject = null;
+
+        alert('Remote session was stopped by the customer. This page will now refresh.');
+        window.location.reload();   // 🔁 simple reset UX
+      });
+
       // Attach remote stream
       pc.ontrack = (event) => {
         console.log('AGENT: ontrack fired, attaching stream to video');
@@ -194,6 +216,7 @@
       const MOVE_THROTTLE_MS = 50;
 
       video.addEventListener('mousemove', (evt) => {
+        if (!sessionActive) return;
         if (!video.videoWidth || !video.videoHeight) return;
         if (!sessionId) return;
 
@@ -217,6 +240,7 @@
 
       // Mouse CLICK
       video.addEventListener('click', (evt) => {
+        if (!sessionActive) return;
         if (!sessionId) return;
 
         if (video.paused) {
@@ -261,6 +285,7 @@
 
       // Keyboard forwarding
       window.addEventListener('keydown', (evt) => {
+        if (!sessionActive) return;
         if (!sessionId) return;
 
         socket.emit('control-event', {

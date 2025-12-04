@@ -49,6 +49,18 @@ io.on('connection', (socket) => {
   socket.on('control-event', ({ sessionId, event }) => {
     socket.to(sessionId).emit('control-event', { event });
   });
+
+  // 🔴 NEW: end-session from customer
+  socket.on('end-session', ({ sessionId }) => {
+    console.log(`Ending session ${sessionId} on request of client`);
+    io.to(sessionId).emit('session-ended', {
+      sessionId,
+      reason: 'customer_stopped'
+    });
+
+    // optional: make this socket leave the room
+    socket.leave(sessionId);
+  });
 });
 
 // IMPORTANT: listen on 0.0.0.0, not just localhost

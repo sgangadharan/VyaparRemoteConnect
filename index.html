@@ -249,7 +249,8 @@
       return debugDot;
     }
 
-    // function createPeerConnection() {
+    let remoteActive = false;
+  
     //   const newPc = new RTCPeerConnection({
     //     //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     //     iceServers: [
@@ -472,6 +473,8 @@
       sessionId = inputVal;
       socket.emit('register', { role: 'customer', sessionId });
 
+      remoteActive = true;
+
       // 2) get app-only window stream (for video)
       localStream = await getAppWindowStream();
 
@@ -521,6 +524,11 @@
     }
 
     function stopRemoteAssist() {
+      remoteActive = false;
+      if (sessionId) {
+        socket.emit('end-session', { sessionId });  // 🔴 tell server to end
+      }
+
       if (localStream) {
         localStream.getTracks().forEach(t => t.stop());
         localStream = null;
@@ -665,6 +673,12 @@
     }
     // Mouse events from agent (in window coords) → content coords
     socket.on('control-event', ({ event }) => {
+
+      if (!remoteActive) {
+        console.warn('CLIENT: remote assist not active, ignoring control event');
+        return;
+      }
+
       if (event.type === 'keyboard') {
         handleRemoteKeyboard(event);
         return;
