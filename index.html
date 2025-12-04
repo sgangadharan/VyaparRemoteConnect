@@ -194,7 +194,12 @@
           border: none;
           border-top: 1px solid #eee;
         " />
-
+    <label for="sessionIdInput">Session Key</label>
+    <input
+      id="sessionIdInput"
+      type="text"
+      placeholder="e.g. customer-123"
+    />
     <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
     <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
       Stop Remote Assist
@@ -215,7 +220,8 @@
     //const socket = io('http://localhost:4000');
     const socket = io('http://135.13.10.157:4000');
 
-    const sessionId = 'demo-session-1';
+    //const sessionId = 'demo-session-1';
+    let sessionId = null;
 
     let pc = null;
 
@@ -243,37 +249,55 @@
       return debugDot;
     }
 
+    // function createPeerConnection() {
+    //   const newPc = new RTCPeerConnection({
+    //     //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    //     iceServers: [
+    //       { urls: 'stun:stun.l.google.com:19302' },
+    //       {
+    //         urls: 'turn:global.relay.metered.ca:80',
+    //         username: 'openai',     // any username works on this public demo relay
+    //         credential: 'openai'    // any password works
+    //       },
+    //       {
+    //         urls: 'turn:global.relay.metered.ca:443',
+    //         username: 'openai',
+    //         credential: 'openai'
+    //       },
+    //       {
+    //         urls: 'turn:global.relay.metered.ca:443?transport=tcp',
+    //         username: 'openai',
+    //         credential: 'openai'
+    //       }
+    //     ]
+    //   });
+
+    //   newPc.onicecandidate = (event) => {
+    //     if (event.candidate) {
+    //       socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+    //     }
+    //   };
+
+    //   return newPc;
+    // }
+
     function createPeerConnection() {
       const newPc = new RTCPeerConnection({
-        //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          {
-            urls: 'turn:global.relay.metered.ca:80',
-            username: 'openai',     // any username works on this public demo relay
-            credential: 'openai'    // any password works
-          },
-          {
-            urls: 'turn:global.relay.metered.ca:443',
-            username: 'openai',
-            credential: 'openai'
-          },
-          {
-            urls: 'turn:global.relay.metered.ca:443?transport=tcp',
-            username: 'openai',
-            credential: 'openai'
-          }
-        ]
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
 
+      // wire ICE handler here
       newPc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
         }
       };
 
+      // (If you ever need ontrack on this side, add it here too)
+
       return newPc;
     }
+
 
     // ---------------------------
     // Custom dropdown wiring
@@ -439,6 +463,13 @@
       // NEW: create a fresh peer connection
       pc = createPeerConnection();
       // 1) identify as customer
+      // NEW: read session key from input
+      const inputVal = document.getElementById('sessionIdInput').value.trim();
+      if (!inputVal) {
+        alert('Please enter a Session Key before starting remote assist.');
+        return;
+      }
+      sessionId = inputVal;
       socket.emit('register', { role: 'customer', sessionId });
 
       // 2) get app-only window stream (for video)
@@ -470,12 +501,12 @@
       // 5) add tracks
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-      // 6) ICE
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
-        }
-      };
+      // // 6) ICE
+      // pc.onicecandidate = (event) => {
+      //   if (event.candidate) {
+      //     socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+      //   }
+      // };
 
       // 7) offer
       const offer = await pc.createOffer();

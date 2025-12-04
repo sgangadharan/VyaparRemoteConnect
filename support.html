@@ -24,8 +24,20 @@
   <body>
     <h1>Support Agent Console</h1>
     <div class="info">
-      Session: <code>demo-session-1</code><br />
-      Open this page <strong>before</strong> the customer clicks “Start Remote Assist” in the app.
+      <div>
+        Session Key:
+        <input
+          id="agentSessionInput"
+          type="text"
+          placeholder="Enter session key (e.g. customer-123)"
+          style="width: 200px;"
+        />
+        <button id="joinSessionBtn">Join Session</button>
+      </div>
+      <small>
+        Open this page and join the correct session key before the customer clicks
+        “Start Remote Assist”.
+      </small>
     </div>
 
     <video
@@ -39,21 +51,21 @@
     <!-- Socket.IO (no integrity / crossorigin, to avoid blocking) -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-      const sessionId = 'demo-session-1';
+      // Dynamic session ID, set after Join Session
+      let sessionId = null;
 
       // If support.html is served from the same host/port as server.js (4000):
-      const socket = io();  // auto-connects to current origin
+      const socket = io(); // auto-connects to current origin
       // or explicitly:
-      // const socket = io('http://192.168.137.102:4000'); // adjust IP if needed
+      // const socket = io('http://135.13.10.157:4000');
 
       const pc = new RTCPeerConnection({
-        //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           {
             urls: 'turn:global.relay.metered.ca:80',
-            username: 'openai',     // any username works on this public demo relay
-            credential: 'openai'    // any password works
+            username: 'openai',
+            credential: 'openai'
           },
           {
             urls: 'turn:global.relay.metered.ca:443',
@@ -76,10 +88,24 @@
 
       socket.on('connect', () => {
         console.log('AGENT: connected to signaling server, id =', socket.id);
-        socket.emit('register', { role: 'agent', sessionId });
+        console.log('AGENT: waiting for session key before joining a room');
       });
 
-      // Now this represents full window bounds (what the video is showing)
+      // Join a session when the button is clicked
+      function joinSession() {
+        const key = document.getElementById('agentSessionInput').value.trim();
+        if (!key) {
+          alert('Please enter a Session Key to join.');
+          return;
+        }
+        sessionId = key;
+        console.log('AGENT: joining session', sessionId);
+        socket.emit('register', { role: 'agent', sessionId });
+      }
+
+      document.getElementById('joinSessionBtn').addEventListener('click', joinSession);
+
+      // Dimensions from customer (FULL WINDOW bounds)
       socket.on('app-dimensions', ({ width, height }) => {
         appWidth = width;
         appHeight = height;
@@ -88,10 +114,13 @@
 
       // WebRTC: ICE + offer/answer
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('AGENT: sending ICE candidate');
-          socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+        if (!event.candidate) return;
+        if (!sessionId) {
+          console.warn('AGENT: ICE candidate but no sessionId yet, ignoring');
+          return;
         }
+        console.log('AGENT: sending ICE candidate');
+        socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
       };
 
       socket.on('offer', async ({ offer }) => {
@@ -101,6 +130,10 @@
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           console.log('AGENT: sending ANSWER');
+          if (!sessionId) {
+            console.warn('AGENT: got offer but no sessionId yet, ANSWER will not be routed correctly');
+            return;
+          }
           socket.emit('answer', { sessionId, answer });
         } catch (e) {
           console.error('AGENT: error handling offer:', e);
@@ -147,11 +180,9 @@
       function mapToWindowCoords(evt) {
         const rect = video.getBoundingClientRect();
 
-        // relative position inside the rendered video rectangle
         const relX = (evt.clientX - rect.left) / rect.width;
         const relY = (evt.clientY - rect.top) / rect.height;
 
-        // map directly to full window bounds (DIP)
         const x = relX * appWidth;
         const y = relY * appHeight;
 
@@ -164,6 +195,7 @@
 
       video.addEventListener('mousemove', (evt) => {
         if (!video.videoWidth || !video.videoHeight) return;
+        if (!sessionId) return;
 
         const now = Date.now();
         if (now - lastMoveSent < MOVE_THROTTLE_MS) return;
@@ -185,6 +217,8 @@
 
       // Mouse CLICK
       video.addEventListener('click', (evt) => {
+        if (!sessionId) return;
+
         if (video.paused) {
           const playPromise = video.play();
           if (playPromise && typeof playPromise.then === 'function') {
@@ -225,8 +259,10 @@
         });
       });
 
-      // Keyboard forwarding (unchanged)
+      // Keyboard forwarding
       window.addEventListener('keydown', (evt) => {
+        if (!sessionId) return;
+
         socket.emit('control-event', {
           sessionId,
           event: {
@@ -244,6 +280,8 @@
       });
 
       window.addEventListener('keyup', (evt) => {
+        if (!sessionId) return;
+
         socket.emit('control-event', {
           sessionId,
           event: {
