@@ -305,6 +305,7 @@
       });
 
       window.addEventListener('keyup', (evt) => {
+        if (!sessionActive) return;
         if (!sessionId) return;
 
         socket.emit('control-event', {
