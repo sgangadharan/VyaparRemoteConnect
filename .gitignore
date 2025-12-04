@@ -1,4 +1,93 @@
+# ==========================
+# Node / NPM
+# ==========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ==========================
+# Build / Dist / Bundles
+# ==========================
 dist/
+build/
 out/
+release/
+*.asar
+
+# Electron-builder / electron-forge outputs
+*.tgz
+*.zip
+*.dmg
+*.exe
+*.msi
+*.app
+*.AppImage
+*.deb
+*.rpm
+*.snap
+
+# ==========================
+# Logs & Runtime files
+# ==========================
+logs/
 *.log
+*.log.*
+debug.log
+*.pid
+*.seed
+*.pid.lock
+
+# ==========================
+# Environment & Secrets
+# ==========================
 .env
+.env.*
+*.local
+
+# ==========================
+# IDE / Editor junk
+# ==========================
+.vscode/
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Cursor / VSCode workspace
+*.code-workspace
+
+# ==========================
+# OS & Misc
+# ==========================
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Icon?
+._*
+
+# ==========================
+# Tests / Coverage
+# ==========================
+coverage/
+.nyc_output/
+
+# ==========================
+# Temporary / Cache
+# ==========================
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# Jest / other test runners
+jest-cache/
+jest-results/
