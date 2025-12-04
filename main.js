@@ -109,6 +109,23 @@ ipcMain.on('remote-control-event', (event, data) => {
   } 
 });
 
+// Used by renderer to find a SCREEN source (entire desktop)
+ipcMain.handle('get-desktop-source-id', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],   // 👈 screen instead of window
+    thumbnailSize: { width: 400, height: 300 }
+  });
+
+  console.log('desktopCapturer screen sources:', sources.map(s => ({
+    id: s.id,
+    name: s.name
+  })));
+
+  // Simple approach: pick the first screen
+  const primaryScreen = sources[0];
+  return primaryScreen ? primaryScreen.id : null;
+});
+
 // Mouse injection (content coordinates)
 function handleRemoteMouse(win, data) {
   const { subtype, x, y, button } = data;

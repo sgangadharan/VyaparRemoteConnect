@@ -200,6 +200,14 @@
       type="text"
       placeholder="e.g. customer-123"
     />
+    <label>
+      <input type="radio" name="captureMode" value="window" checked />
+      Share this app window only
+    </label>
+    <label>
+      <input type="radio" name="captureMode" value="desktop" />
+      Share entire desktop
+    </label>
     <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
     <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
       Stop Remote Assist
@@ -458,6 +466,30 @@
       return stream;
     }
 
+    async function getDesktopStream() {
+      // Ask main for a SCREEN sourceId
+      const sourceId = await ipcRenderer.invoke('get-desktop-source-id');
+
+      if (!sourceId) {
+        alert('Could not find a desktop screen source.');
+        throw new Error('Desktop screen source not found');
+      }
+
+      console.log('Using SCREEN sourceId from main:', sourceId);
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId
+          }
+        }
+      });
+
+      return stream;
+    }
+
     async function startRemoteAssist() {
       document.getElementById('remoteStatus').innerText = 'Starting remote assist...';
 
@@ -474,7 +506,15 @@
       socket.emit('register', { role: 'customer', sessionId });
 
       // 2) get app-only window stream (for video)
-      localStream = await getAppWindowStream();
+      // 🔽 Decide what to capture
+      const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
+      if (mode === 'desktop') {
+        localStream = await getDesktopStream();
+      } else {
+        localStream = await getAppWindowStream();
+      }
+      
+      //localStream = await getAppWindowStream();
 
       // 3) query window + content geometry from main (all in DIP)
       const winBounds = await ipcRenderer.invoke('get-window-bounds');
