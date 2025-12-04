@@ -473,8 +473,6 @@
       sessionId = inputVal;
       socket.emit('register', { role: 'customer', sessionId });
 
-      remoteActive = true;
-
       // 2) get app-only window stream (for video)
       localStream = await getAppWindowStream();
 
@@ -515,6 +513,9 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit('offer', { sessionId, offer });
+
+      // Only mark remote as active once all initialization above succeeds
+      remoteActive = true;
 
       // 8) UI
       document.getElementById('startRemoteBtn').disabled = true;
