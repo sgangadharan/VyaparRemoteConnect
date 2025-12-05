@@ -64,7 +64,7 @@ ipcMain.handle('get-desktop-source-id', async () => {
     thumbnailSize: { width: 400, height: 300 }
   });
 
-  console.log('desktopCapturer screen sources:', sources.map(s => ({ id: s.id, name: s.name }))
+  console.log('desktopCapturer screen sources:',sources.map(s => ({ id: s.id, name: s.name }))
   );
 
   // Simple: pick the first screen (primary). For multi-monitor UI you can expose these to the user.
@@ -108,11 +108,63 @@ ipcMain.on('focus-window', () => {
 // -----------------------------------------
 // Remote control events from renderer
 // -----------------------------------------
+// ipcMain.on('remote-control-event', (event, data) => {
+//   if (!mainWindow) return;
+
+//   if (data.type === 'mouse') {
+//     // Mouse path – unchanged
+//     mainWindow.webContents.sendInputEvent({
+//       type: data.subtype,        // 'mouseDown', 'mouseUp', 'mouseMove'
+//       x: Math.round(data.x),
+//       y: Math.round(data.y),
+//       button: data.button || 'left',
+//       clickCount: 1
+//     });
+
+//   } 
+// });
 ipcMain.on('remote-control-event', (event, data) => {
   if (!mainWindow) return;
 
+  // Mouse path (including scroll)
+  if (data.type === 'mouse') {
+    // Special case: wheel / scroll
+    if (data.subtype === 'mouseWheel') {
+      const x = Math.round(data.x);
+      const y = Math.round(data.y);
+
+      const wheelEvent = {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX: data.deltaX || 0,
+        deltaY: data.deltaY || 0
+      };
+
+      console.log('MAIN injecting mouseWheel event:', wheelEvent);
+      mainWindow.webContents.sendInputEvent(wheelEvent);
+      return;
+    }
+
+    // For normal mouseDown / mouseUp / mouseMove, delegate to helper
+    handleRemoteMouse(mainWindow, data);
+    return;
+  }
+
+  // Keyboard path
+  if (data.type === 'keyboard') {
+    handleRemoteKeyboard(mainWindow, data);
+    return;
+  }
+
+  console.warn('MAIN: unknown remote-control-event type:', data.type, data);
+});
+
+// Mouse injection (content coordinates)
+function handleRemoteMouse(win, data) {
   if (data.type === 'mouse') {
     // Mouse path – unchanged
+    console.log('MAIN injecting mouse event:',data);
     mainWindow.webContents.sendInputEvent({
       type: data.subtype,        // 'mouseDown', 'mouseUp', 'mouseMove'
       x: Math.round(data.x),
@@ -120,24 +172,11 @@ ipcMain.on('remote-control-event', (event, data) => {
       button: data.button || 'left',
       clickCount: 1
     });
-
+    
   } 
-});
 
-// Mouse injection (content coordinates)
-function handleRemoteMouse(win, data) {
-  const { subtype, x, y, button } = data;
-
-  const mouseEvent = {
-    type: subtype,            // 'mouseDown' | 'mouseUp' | 'mouseMove'
-    x: Math.round(x),
-    y: Math.round(y),
-    button: button || 'left',
-    clickCount: 1
-  };
-
-  console.log('MAIN injecting mouse event:', mouseEvent);
-  win.webContents.sendInputEvent(mouseEvent);
+  
+  //win.webContents.sendInputEvent(mouseEvent);
 }
 
 // Keyboard injection
