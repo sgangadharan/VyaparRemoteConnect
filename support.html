@@ -296,6 +296,17 @@
 
           const { x, y } = mapToWindowCoords(evt);
 
+          // Use discrete steps instead of tiny trackpad floats
+          const STEP = 120; // standard scroll step
+
+          const deltaY =
+            evt.deltaY > 0 ? STEP : evt.deltaY < 0 ? -STEP : 0;
+          const deltaX =
+            evt.deltaX > 0 ? STEP : evt.deltaX < 0 ? -STEP : 0;
+
+          // If no meaningful movement, skip
+          if (!deltaX && !deltaY) return;
+
           socket.emit('control-event', {
             sessionId,
             event: {
@@ -303,8 +314,8 @@
               subtype: 'mouseWheel',
               x,
               y,
-              deltaX: evt.deltaX,
-              deltaY: evt.deltaY
+              deltaX,
+              deltaY
             }
           });
         },

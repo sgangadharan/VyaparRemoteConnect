@@ -138,7 +138,8 @@ ipcMain.on('remote-control-event', (event, data) => {
         x,
         y,
         deltaX: data.deltaX || 0,
-        deltaY: data.deltaY || 0
+        deltaY: data.deltaY || 0,
+        modifiers: []   // <— important for Electron's event shape
       };
 
       console.log('MAIN injecting mouseWheel event:', wheelEvent);
