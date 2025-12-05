@@ -283,6 +283,34 @@
         });
       });
 
+      // Mouse WHEEL (scroll)
+      video.addEventListener(
+        'wheel',
+        (evt) => {
+          if (!sessionActive) return;
+          if (!sessionId) return;
+          if (!video.videoWidth || !video.videoHeight) return;
+
+          // prevent the browser page from scrolling instead
+          evt.preventDefault();
+
+          const { x, y } = mapToWindowCoords(evt);
+
+          socket.emit('control-event', {
+            sessionId,
+            event: {
+              type: 'mouse',
+              subtype: 'mouseWheel',
+              x,
+              y,
+              deltaX: evt.deltaX,
+              deltaY: evt.deltaY
+            }
+          });
+        },
+        { passive: false }
+      );
+
       // Keyboard forwarding
       window.addEventListener('keydown', (evt) => {
         if (!sessionActive) return;

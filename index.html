@@ -793,6 +793,30 @@
 
       if (event.type !== 'mouse') return;
 
+      // Handle wheel separately: convert window coords → content coords and forward to main
+      if (event.subtype === 'mouseWheel') {
+        if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
+          console.warn('CLIENT: missing geometry, ignoring mouseWheel event');
+          return;
+        }
+
+        const winX = event.x;
+        const winY = event.y;
+
+        const adjX = winX;
+        const adjY = winY - windowOffsetTop;
+
+        ipcRenderer.send('remote-control-event', {
+          type: 'mouseWheel',
+          x: adjX,
+          y: adjY,
+          deltaX: event.deltaX || 0,
+          deltaY: event.deltaY || 0
+        });
+
+        return; // don't fall through into click/move handling
+      }
+
       // mouse handling as you already have it
       if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
         console.warn('CLIENT: missing geometry, ignoring mouse event');
