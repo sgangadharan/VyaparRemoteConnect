@@ -133,12 +133,15 @@ ipcMain.on('remote-control-event', (event, data) => {
       const x = Math.round(data.x || 0);
       const y = Math.round(data.y || 0);
 
+      const deltaX = data.deltaX || 0;
+      const deltaY = data.deltaY || 0;
+
       const wheelEvent = {
         type: 'mouseWheel',
         x,
         y,
-        deltaX: data.deltaX || 0,
-        deltaY: data.deltaY || 0,
+        deltaX,
+        deltaY,
         // these extra fields matter for Chromium actually scrolling
         wheelTicksX: deltaX,
         wheelTicksY: deltaY,

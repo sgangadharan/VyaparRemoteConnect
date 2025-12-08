@@ -350,6 +350,10 @@
     // Offset from window top to content top (titlebar height)
     let windowOffsetTop = 0;
 
+    let windowX = 0;
+    let windowY = 0;
+    let currentShareMode = 'app'; // 'app' | 'desktop'
+
     // Focus priming
     let isPrimed = false;
 
@@ -626,10 +630,13 @@
       }
       updateShareWarning();
       
-      //localStream = await getAppWindowStream();
+      currentShareMode = shareMode;                  // 'app' or 'desktop'
+      const shareDesktop = currentShareMode === 'desktop';
 
       // 3) query window + content geometry from main (all in DIP)
       const winBounds = await ipcRenderer.invoke('get-window-bounds');
+      windowX = winBounds.x;
+      windowY = winBounds.y;
       windowWidth = winBounds.width;
       windowHeight = winBounds.height;
 
@@ -645,21 +652,42 @@
       console.log('CLIENT: windowOffsetTop:', windowOffsetTop);
 
       // 4) Tell agent the FULL WINDOW size (what the video actually shows)
-      socket.emit('app-dimensions', {
-        sessionId,
-        width: windowWidth,
-        height: windowHeight
-      });
+      // --- choose capture source + dimensions depending on mode ---
+      if (shareDesktop) {
+        // DESKTOP: capture whole screen
+        const sourceId = await ipcRenderer.invoke('get-desktop-source-id');
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId
+            }
+          }
+        });
+
+        // send full SCREEN size so agent maps into screen coords
+        const screenWidth = window.screen.width;
+        const screenHeight = window.screen.height;
+        socket.emit('app-dimensions', {
+          sessionId,
+          width: screenWidth,
+          height: screenHeight
+        });
+
+      } else {
+        // APP ONLY: existing behavior
+        localStream = await getAppWindowStream();
+
+        socket.emit('app-dimensions', {
+          sessionId,
+          width: windowWidth,
+          height: windowHeight
+        });
+      }
 
       // 5) add tracks
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
-
-      // // 6) ICE
-      // pc.onicecandidate = (event) => {
-      //   if (event.candidate) {
-      //     socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
-      //   }
-      // };
 
       // 7) offer
       const offer = await pc.createOffer();
@@ -826,58 +854,62 @@
     }
     // Mouse events from agent (in window coords) → content coords
     socket.on('control-event', ({ event }) => {
-
       if (!remoteActive) {
         console.warn('CLIENT: remote assist not active, ignoring control event');
         return;
       }
 
+      // 1) Keyboard
       if (event.type === 'keyboard') {
         handleRemoteKeyboard(event);
         return;
       }
 
+      // We only handle mouse / wheel beyond this point
       if (event.type !== 'mouse') return;
 
-      // Handle wheel separately: convert window coords → content coords and forward to main
-      if (event.subtype === 'mouseWheel') {
-        if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
-          console.warn('CLIENT: missing geometry, ignoring mouseWheel event');
-          return;
-        }
-
-        const winX = event.x;
-        const winY = event.y;
-
-        const adjX = winX;
-        const adjY = winY - windowOffsetTop;
-
-        ipcRenderer.send('remote-control-event', {
-          type: 'mouseWheel',
-          x: adjX,
-          y: adjY,
-          deltaX: event.deltaX || 0,
-          deltaY: event.deltaY || 0
-        });
-
-        return; // don't fall through into click/move handling
-      }
-
-      // mouse handling as you already have it
       if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
         console.warn('CLIENT: missing geometry, ignoring mouse event');
         return;
       }
 
-      const winX = event.x;
-      const winY = event.y;
+      const rawX = event.x;
+      const rawY = event.y;
+      let adjX, adjY;
 
-      const adjX = winX;
-      const adjY = winY - windowOffsetTop;
+      // -----------------------------
+      // Coordinate mapping
+      // -----------------------------
+      if (currentShareMode === 'desktop') {
+        // Agent is sending SCREEN coords: convert to content coords
+        adjX = rawX - windowX;
+        adjY = rawY - (windowY + windowOffsetTop);
+      } else {
+        // App-only: agent is sending WINDOW coords: convert to content coords
+        adjX = rawX;
+        adjY = rawY - windowOffsetTop;
+      }
 
+      // 2) Scroll / wheel events
+      if (event.subtype === 'mouseWheel') {
+        const wheelPayload = {
+          type: 'mouse',          // IMPORTANT: must be 'mouse'
+          subtype: 'mouseWheel',  // MAIN checks this
+          x: adjX,
+          y: adjY,
+          deltaX: event.deltaX || 0,
+          deltaY: event.deltaY || 0
+        };
+
+        console.log('CLIENT: sending mouseWheel to main:', wheelPayload);
+        ipcRenderer.send('remote-control-event', wheelPayload);
+        return;
+      }
+
+      // 3) Normal mouseDown / mouseUp / mouseMove
       const adjusted = {
-        type: event.type,
-        subtype: event.subtype,
+        type: 'mouse',
+        subtype: event.subtype,          // 'mouseDown', 'mouseUp', 'mouseMove'
         x: adjX,
         y: adjY,
         button: event.button || 'left',
@@ -885,7 +917,7 @@
         deltaY: event.deltaY || 0
       };
 
-      console.log('CLIENT: incoming mouse (window coords):', event);
+      console.log('CLIENT: incoming mouse:', event);
       console.log('CLIENT: adjusted for content coords:', adjusted);
 
       if (!isPrimed) {
@@ -896,8 +928,8 @@
       }
 
       const dot = ensureDebugDot();
-      dot.style.left = adjX - 4 + 'px';
-      dot.style.top = adjY - 4 + 'px';
+      dot.style.left = (adjX - 4) + 'px';
+      dot.style.top  = (adjY - 4) + 'px';
       dot.style.display = 'block';
 
       ipcRenderer.send('remote-control-event', adjusted);
