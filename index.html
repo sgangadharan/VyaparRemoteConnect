@@ -182,6 +182,48 @@
       padding: 6px 8px;
       border: 1px solid #ffcc80;
     }
+
+    .share-mode-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .share-label {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .share-option {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      margin: 0;
+    }
+
+    .share-warning {
+      margin-top: 4px;
+      font-size: 12px;
+      color: #c0392b;
+    }
+
+    .share-select {
+      width: 100%;
+      padding: 10px;
+      margin-top: 6px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 14px;
+      background: #fff;
+    }
+
+    .share-warning {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #c0392b;
+    }
   </style>
 </head>
 
@@ -232,22 +274,43 @@
     />
     
     <!-- Capture mode selector (side by side) -->
-    <div class="capture-mode">
-      <span class="capture-mode-label">Share mode:</span>
-      <label class="capture-mode-option">
-        <input type="radio" name="captureMode" value="window" checked />
-        Share App only
+    <!-- <div class="share-mode-row">
+      <span class="share-label">Share mode:</span>
+    
+      <label class="share-option">
+        <input
+          type="radio"
+          name="shareMode"
+          value="app"
+          id="shareApp"
+          checked
+        />
+        <span>Share App only</span>
       </label>
-      <label class="capture-mode-option">
-        <input type="radio" name="captureMode" value="desktop" />
-        Share Desktop screen
+    
+      <label class="share-option">
+        <input
+          type="radio"
+          name="shareMode"
+          value="desktop"
+          id="shareDesktop"
+        />
+        <span>Share Desktop screen</span>
       </label>
-    </div>
+    </div> -->
+    <label for="shareModeSelect">Share mode</label>
+
+    <select id="shareModeSelect" class="share-select">
+      <option value="app" selected>Share App only</option>
+      <option value="desktop">Share Desktop screen</option>
+    </select>
 
     <!-- Warning for desktop share -->
-    <div id="shareWarning" class="share-warning" style="display: none;">
-      ⚠️ You’re sharing your entire screen. Make sure no sensitive information is visible.
+    <div id="shareWarning" class="share-warning" style="display:none;">
+      ⚠️ You’re sharing your entire screen
     </div>
+    
+    
     
     <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
     <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
@@ -299,49 +362,30 @@
     }
 
     function updateShareWarning() {
-      const mode =
-        document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
-      const warn = document.getElementById('shareWarning');
+      // const mode =
+      //   document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
+      // const warn = document.getElementById('shareWarning');
 
-      if (mode === 'desktop') {
-        warn.style.display = 'block';
-      } else {
-        warn.style.display = 'none';
-      }
+      // if (mode === 'desktop') {
+      //   warn.style.display = 'block';
+      // } else {
+      //   warn.style.display = 'none';
+      // }
+
+      const shareModeSelect = document.getElementById('shareModeSelect');
+      const shareWarning = document.getElementById('shareWarning');
+
+      // Show / hide warning
+      shareModeSelect.addEventListener('change', () => {
+        if (shareModeSelect.value === 'desktop') {
+          shareWarning.style.display = 'block';
+        } else {
+          shareWarning.style.display = 'none';
+        }
+      });
     }
 
     let remoteActive = false;
-  
-    //   const newPc = new RTCPeerConnection({
-    //     //iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    //     iceServers: [
-    //       { urls: 'stun:stun.l.google.com:19302' },
-    //       {
-    //         urls: 'turn:global.relay.metered.ca:80',
-    //         username: 'openai',     // any username works on this public demo relay
-    //         credential: 'openai'    // any password works
-    //       },
-    //       {
-    //         urls: 'turn:global.relay.metered.ca:443',
-    //         username: 'openai',
-    //         credential: 'openai'
-    //       },
-    //       {
-    //         urls: 'turn:global.relay.metered.ca:443?transport=tcp',
-    //         username: 'openai',
-    //         credential: 'openai'
-    //       }
-    //     ]
-    //   });
-
-    //   newPc.onicecandidate = (event) => {
-    //     if (event.candidate) {
-    //       socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
-    //     }
-    //   };
-
-    //   return newPc;
-    // }
 
     function createPeerConnection() {
       const newPc = new RTCPeerConnection({
@@ -569,9 +613,11 @@
 
       // 2) get app-only window stream (for video)
       // 🔽 Decide what to capture
-      const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
+      //const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
+      const shareMode = document.getElementById('shareModeSelect').value;
+      //const mode = shareMode === 'desktop' ? 'desktop' : 'window';
 
-      if (mode === 'desktop') {
+      if (shareMode === 'desktop') {
         console.log('CLIENT: capturing entire desktop');
         localStream = await getDesktopStream();
       } else {
@@ -834,7 +880,9 @@
         subtype: event.subtype,
         x: adjX,
         y: adjY,
-        button: event.button || 'left'
+        button: event.button || 'left',
+        deltaX: event.deltaX || 0,
+        deltaY: event.deltaY || 0
       };
 
       console.log('CLIENT: incoming mouse (window coords):', event);

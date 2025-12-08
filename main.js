@@ -130,8 +130,8 @@ ipcMain.on('remote-control-event', (event, data) => {
   if (data.type === 'mouse') {
     // Special case: wheel / scroll
     if (data.subtype === 'mouseWheel') {
-      const x = Math.round(data.x);
-      const y = Math.round(data.y);
+      const x = Math.round(data.x || 0);
+      const y = Math.round(data.y || 0);
 
       const wheelEvent = {
         type: 'mouseWheel',
@@ -139,7 +139,13 @@ ipcMain.on('remote-control-event', (event, data) => {
         y,
         deltaX: data.deltaX || 0,
         deltaY: data.deltaY || 0,
-        modifiers: []   // <— important for Electron's event shape
+        // these extra fields matter for Chromium actually scrolling
+        wheelTicksX: deltaX,
+        wheelTicksY: deltaY,
+        accelerationRatioX: 1,
+        accelerationRatioY: 1,
+        hasPreciseScrollingDeltas: true,
+        canScroll: true
       };
 
       console.log('MAIN injecting mouseWheel event:', wheelEvent);
