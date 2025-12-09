@@ -152,62 +152,6 @@
       z-index: 99999;
       display: none;
     }
-    
-    .capture-mode {
-      margin-top: 12px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 14px;
-      flex-wrap: wrap;
-    }
-
-    .capture-mode-label {
-      font-weight: 600;
-    }
-
-    .capture-mode-option {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      cursor: pointer;
-    }
-
-    .share-warning {
-      margin-top: 8px;
-      font-size: 12px;
-      color: #b34700;
-      background: #fff3e0;
-      border-radius: 6px;
-      padding: 6px 8px;
-      border: 1px solid #ffcc80;
-    }
-
-    .share-mode-row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      margin-top: 16px;
-    }
-
-    .share-label {
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .share-option {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      white-space: nowrap;
-      margin: 0;
-    }
-
-    .share-warning {
-      margin-top: 4px;
-      font-size: 12px;
-      color: #c0392b;
-    }
 
     .share-select {
       width: 100%;
@@ -223,6 +167,10 @@
       margin-top: 6px;
       font-size: 12px;
       color: #c0392b;
+      background: #fff3e0;
+      border-radius: 6px;
+      padding: 6px 8px;
+      border: 1px solid #ffcc80;
     }
   </style>
 </head>
@@ -266,40 +214,11 @@
           border: none;
           border-top: 1px solid #eee;
         " />
-    <label for="sessionIdInput">Session Key</label>
-    <input
-      id="sessionIdInput"
-      type="text"
-      placeholder="e.g. customer-123"
-    />
-    
-    <!-- Capture mode selector (side by side) -->
-    <!-- <div class="share-mode-row">
-      <span class="share-label">Share mode:</span>
-    
-      <label class="share-option">
-        <input
-          type="radio"
-          name="shareMode"
-          value="app"
-          id="shareApp"
-          checked
-        />
-        <span>Share App only</span>
-      </label>
-    
-      <label class="share-option">
-        <input
-          type="radio"
-          name="shareMode"
-          value="desktop"
-          id="shareDesktop"
-        />
-        <span>Share Desktop screen</span>
-      </label>
-    </div> -->
-    <label for="shareModeSelect">Share mode</label>
 
+    <label for="sessionIdInput">Session Key</label>
+    <input id="sessionIdInput" type="text" placeholder="e.g. customer-123" />
+
+    <label for="shareModeSelect">Share mode</label>
     <select id="shareModeSelect" class="share-select">
       <option value="app" selected>Share App only</option>
       <option value="desktop">Share Desktop screen</option>
@@ -309,9 +228,7 @@
     <div id="shareWarning" class="share-warning" style="display:none;">
       ⚠️ You’re sharing your entire screen
     </div>
-    
-    
-    
+
     <button id="startRemoteBtn" onclick="startRemoteAssist()">Start Remote Assist</button>
     <button class="button-secondary" id="stopRemoteBtn" onclick="stopRemoteAssist()" disabled>
       Stop Remote Assist
@@ -329,15 +246,14 @@
     console.log('electron keys in renderer:', Object.keys(electron));
 
     // signaling server
-    //const socket = io('http://localhost:4000');
     const socket = io('http://135.13.10.157:4000');
 
-    //const sessionId = 'demo-session-1';
     let sessionId = null;
-
     let pc = null;
-
     let localStream = null;
+
+    // capture mode: 'app' or 'desktop'
+    let captureMode = 'app';
 
     // Full window bounds (titlebar + content), DIP
     let windowWidth = null;
@@ -350,12 +266,14 @@
     // Offset from window top to content top (titlebar height)
     let windowOffsetTop = 0;
 
-    let windowX = 0;
-    let windowY = 0;
-    let currentShareMode = 'app'; // 'app' | 'desktop'
+    // Window position on SCREEN (DIP)
+    let windowPosX = 0;
+    let windowPosY = 0;
 
     // Focus priming
     let isPrimed = false;
+
+    let remoteActive = false;
 
     let debugDot = null;
     function ensureDebugDot() {
@@ -365,49 +283,39 @@
       return debugDot;
     }
 
-    function updateShareWarning() {
-      // const mode =
-      //   document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
-      // const warn = document.getElementById('shareWarning');
+    // --- Share mode select + warning ---
+    const shareModeSelect = document.getElementById('shareModeSelect');
+    const shareWarning = document.getElementById('shareWarning');
 
-      // if (mode === 'desktop') {
-      //   warn.style.display = 'block';
-      // } else {
-      //   warn.style.display = 'none';
-      // }
-
-      const shareModeSelect = document.getElementById('shareModeSelect');
-      const shareWarning = document.getElementById('shareWarning');
-
-      // Show / hide warning
-      shareModeSelect.addEventListener('change', () => {
-        if (shareModeSelect.value === 'desktop') {
-          shareWarning.style.display = 'block';
-        } else {
-          shareWarning.style.display = 'none';
-        }
-      });
+    function refreshShareWarning() {
+      if (captureMode === 'desktop') {
+        shareWarning.style.display = 'block';
+      } else {
+        shareWarning.style.display = 'none';
+      }
     }
 
-    let remoteActive = false;
+    captureMode = shareModeSelect.value;  // initial
+    refreshShareWarning();
+
+    shareModeSelect.addEventListener('change', () => {
+      captureMode = shareModeSelect.value;
+      refreshShareWarning();
+    });
 
     function createPeerConnection() {
       const newPc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
 
-      // wire ICE handler here
       newPc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
         }
       };
 
-      // (If you ever need ontrack on this side, add it here too)
-
       return newPc;
     }
-
 
     // ---------------------------
     // Custom dropdown wiring
@@ -424,7 +332,7 @@
     function openSexDropdown() {
       sexMenu.style.display = 'block';
       sexOpen = true;
-      highlightSexItem(0); // default highlight first option
+      highlightSexItem(0);
     }
 
     function closeSexDropdown() {
@@ -452,7 +360,6 @@
       });
     }
 
-    // Toggle on click
     sexDropdown.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!sexOpen) {
@@ -462,8 +369,7 @@
       }
     });
 
-    // Select by clicking an item
-    sexItems.forEach((item, index) => {
+    sexItems.forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         const value = item.dataset.value;
@@ -472,25 +378,20 @@
       });
     });
 
-    // Close dropdown if clicking outside
     document.addEventListener('click', () => {
       if (sexOpen) {
         closeSexDropdown();
       }
     });
 
-    // Keyboard navigation when dropdown has focus
     sexDropdown.addEventListener('keydown', (e) => {
       if (!sexOpen && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
-        // open on first key press
         openSexDropdown();
         e.preventDefault();
         return;
       }
 
-      if (!sexOpen) {
-        return; // ignore other keys if closed
-      }
+      if (!sexOpen) return;
 
       switch (e.key) {
         case 'ArrowDown': {
@@ -525,21 +426,13 @@
       }
     });
 
-    // After all your DOM globals are defined (sexDropdown, etc.):
-    document.addEventListener('DOMContentLoaded', () => {
-      updateShareWarning();
-      document
-        .querySelectorAll('input[name="captureMode"]')
-        .forEach((el) => el.addEventListener('change', updateShareWarning));
-    });
-
     // ---------------------------
-    // Existing form & remote code
-    //----------------------------
+    // Form & capture helpers
+    // ---------------------------
     function submitForm() {
       const firstName = document.getElementById('firstName').value.trim();
       const lastName = document.getElementById('lastName').value.trim();
-      const sex = document.getElementById('sex').value; // now from hidden input
+      const sex = document.getElementById('sex').value;
 
       if (!firstName || !lastName || !sex) {
         alert('Please fill all fields.');
@@ -560,7 +453,7 @@
         throw new Error('App window source not found');
       }
 
-      console.log('Using sourceId from main:', sourceId);
+      console.log('Using window sourceId from main:', sourceId);
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -575,7 +468,6 @@
       return stream;
     }
 
-    // NEW: capture entire desktop (screen) instead of just this window
     async function getDesktopStream() {
       const sourceId = await ipcRenderer.invoke('get-desktop-source-id');
 
@@ -599,14 +491,16 @@
       return stream;
     }
 
-
     async function startRemoteAssist() {
       document.getElementById('remoteStatus').innerText = 'Starting remote assist...';
 
-      // NEW: create a fresh peer connection
+      // fresh state
+      remoteActive = false;
+      isPrimed = false;
+
       pc = createPeerConnection();
-      // 1) identify as customer
-      // NEW: read session key from input
+
+      // session key
       const inputVal = document.getElementById('sessionIdInput').value.trim();
       if (!inputVal) {
         alert('Please enter a Session Key before starting remote assist.');
@@ -615,28 +509,23 @@
       sessionId = inputVal;
       socket.emit('register', { role: 'customer', sessionId });
 
-      // 2) get app-only window stream (for video)
-      // 🔽 Decide what to capture
-      //const mode = document.querySelector('input[name="captureMode"]:checked')?.value || 'window';
-      const shareMode = document.getElementById('shareModeSelect').value;
-      //const mode = shareMode === 'desktop' ? 'desktop' : 'window';
+      // capture mode from select
+      captureMode = shareModeSelect.value;
+      refreshShareWarning();
 
-      if (shareMode === 'desktop') {
+      // capture stream
+      if (captureMode === 'desktop') {
         console.log('CLIENT: capturing entire desktop');
         localStream = await getDesktopStream();
       } else {
         console.log('CLIENT: capturing app window only');
         localStream = await getAppWindowStream();
       }
-      updateShareWarning();
-      
-      currentShareMode = shareMode;                  // 'app' or 'desktop'
-      const shareDesktop = currentShareMode === 'desktop';
 
-      // 3) query window + content geometry from main (all in DIP)
+      // geometry from main
       const winBounds = await ipcRenderer.invoke('get-window-bounds');
-      windowX = winBounds.x;
-      windowY = winBounds.y;
+      windowPosX = winBounds.x;
+      windowPosY = winBounds.y;
       windowWidth = winBounds.width;
       windowHeight = winBounds.height;
 
@@ -651,53 +540,33 @@
       console.log('CLIENT: content bounds:', content);
       console.log('CLIENT: windowOffsetTop:', windowOffsetTop);
 
-      // 4) Tell agent the FULL WINDOW size (what the video actually shows)
-      // --- choose capture source + dimensions depending on mode ---
-      if (shareDesktop) {
-        // DESKTOP: capture whole screen
-        const sourceId = await ipcRenderer.invoke('get-desktop-source-id');
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId
-            }
-          }
-        });
+      // tell agent what the video represents
+      let captureWidth = windowWidth;
+      let captureHeight = windowHeight;
 
-        // send full SCREEN size so agent maps into screen coords
-        const screenWidth = window.screen.width;
-        const screenHeight = window.screen.height;
-        socket.emit('app-dimensions', {
-          sessionId,
-          width: screenWidth,
-          height: screenHeight
-        });
-
-      } else {
-        // APP ONLY: existing behavior
-        localStream = await getAppWindowStream();
-
-        socket.emit('app-dimensions', {
-          sessionId,
-          width: windowWidth,
-          height: windowHeight
-        });
+      if (captureMode === 'desktop') {
+        const screenBounds = await ipcRenderer.invoke('get-primary-display-bounds');
+        captureWidth = screenBounds.width;
+        captureHeight = screenBounds.height;
+        console.log('CLIENT: primary display bounds:', screenBounds);
       }
 
-      // 5) add tracks
+      socket.emit('app-dimensions', {
+        sessionId,
+        width: captureWidth,
+        height: captureHeight
+      });
+
+      // add tracks to peer connection
       localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-      // 7) offer
+      // WebRTC offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit('offer', { sessionId, offer });
 
-      // Only mark remote as active once all initialization above succeeds
       remoteActive = true;
 
-      // 8) UI
       document.getElementById('startRemoteBtn').disabled = true;
       document.getElementById('stopRemoteBtn').disabled = false;
       document.getElementById('remoteStatus').innerText =
@@ -707,7 +576,7 @@
     function stopRemoteAssist() {
       remoteActive = false;
       if (sessionId) {
-        socket.emit('end-session', { sessionId });  // 🔴 tell server to end
+        socket.emit('end-session', { sessionId });
       }
 
       if (localStream) {
@@ -716,10 +585,12 @@
       }
 
       if (pc) {
-        try { pc.getSenders().forEach(sender => pc.removeTrack(sender)); } catch {}
-        try { pc.close(); } catch {}
+        try { pc.getSenders().forEach(sender => pc.removeTrack(sender)); } catch { }
+        try { pc.close(); } catch { }
         pc = null;
       }
+
+      isPrimed = false;
 
       document.getElementById('startRemoteBtn').disabled = false;
       document.getElementById('stopRemoteBtn').disabled = true;
@@ -743,12 +614,9 @@
     function handleRemoteKeyboard(ev) {
       console.log('CLIENT: incoming keyboard event:', ev);
 
-      // Which element currently has focus in the Electron window?
       const active = document.activeElement;
       if (!active) return;
 
-      // Recreate a DOM KeyboardEvent so any element-specific handlers (like the
-      // custom dropdown) still work normally.
       const eventType = ev.subtype === 'keyDown' ? 'keydown' : 'keyup';
       const domEvent = new KeyboardEvent(eventType, {
         key: ev.key,
@@ -761,20 +629,16 @@
         cancelable: true
       });
 
-      // Dispatch to the focused element so dropdown key navigation etc. works.
       active.dispatchEvent(domEvent);
 
-      // Only mutate text on keyDown, not keyUp.
       if (eventType !== 'keydown') return;
 
-      // Let the custom dropdown handle its own key logic.
       if (active.id === 'sexDropdown') {
         return;
       }
 
       const tag = active.tagName.toLowerCase();
       if (tag !== 'input' && tag !== 'textarea') {
-        // Don't try to type into non-text elements.
         return;
       }
 
@@ -787,7 +651,6 @@
         active.selectionStart = active.selectionEnd = newPos;
       };
 
-      // Printable characters (ignore modifier combos like Ctrl+C).
       if (ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
         const before = value.slice(0, start);
         const after = value.slice(end);
@@ -797,7 +660,6 @@
         return;
       }
 
-      // Handle basic editing/navigation keys.
       switch (ev.key) {
         case 'Backspace': {
           if (start === end && start > 0) {
@@ -811,7 +673,6 @@
           }
           break;
         }
-
         case 'Delete': {
           if (start === end && start < value.length) {
             const before = value.slice(0, start);
@@ -824,48 +685,41 @@
           }
           break;
         }
-
         case 'ArrowLeft': {
           const newPos = Math.max(0, start - 1);
           active.selectionStart = active.selectionEnd = newPos;
           break;
         }
-
         case 'ArrowRight': {
           const newPos = Math.min(value.length, end + 1);
           active.selectionStart = active.selectionEnd = newPos;
           break;
         }
-
         case 'Home': {
           active.selectionStart = active.selectionEnd = 0;
           break;
         }
-
         case 'End': {
           active.selectionStart = active.selectionEnd = value.length;
           break;
         }
-
         default:
-          // ignore other special keys here
           break;
       }
     }
-    // Mouse events from agent (in window coords) → content coords
+
+    // Mouse + wheel events from agent
     socket.on('control-event', ({ event }) => {
       if (!remoteActive) {
         console.warn('CLIENT: remote assist not active, ignoring control event');
         return;
       }
 
-      // 1) Keyboard
       if (event.type === 'keyboard') {
         handleRemoteKeyboard(event);
         return;
       }
 
-      // We only handle mouse / wheel beyond this point
       if (event.type !== 'mouse') return;
 
       if (!windowWidth || !windowHeight || !contentWidth || !contentHeight) {
@@ -875,26 +729,27 @@
 
       const rawX = event.x;
       const rawY = event.y;
-      let adjX, adjY;
 
-      // -----------------------------
-      // Coordinate mapping
-      // -----------------------------
-      if (currentShareMode === 'desktop') {
-        // Agent is sending SCREEN coords: convert to content coords
-        adjX = rawX - windowX;
-        adjY = rawY - (windowY + windowOffsetTop);
+      // Map agent coords → window coords
+      let winX, winY;
+      if (captureMode === 'desktop') {
+        // Agent sends SCREEN coords
+        winX = rawX - windowPosX;
+        winY = rawY - windowPosY;
       } else {
-        // App-only: agent is sending WINDOW coords: convert to content coords
-        adjX = rawX;
-        adjY = rawY - windowOffsetTop;
+        // Agent sends WINDOW coords
+        winX = rawX;
+        winY = rawY;
       }
 
-      // 2) Scroll / wheel events
+      const adjX = winX;
+      const adjY = winY - windowOffsetTop;
+
+      // Wheel
       if (event.subtype === 'mouseWheel') {
         const wheelPayload = {
-          type: 'mouse',          // IMPORTANT: must be 'mouse'
-          subtype: 'mouseWheel',  // MAIN checks this
+          type: 'mouse',
+          subtype: 'mouseWheel',
           x: adjX,
           y: adjY,
           deltaX: event.deltaX || 0,
@@ -906,10 +761,10 @@
         return;
       }
 
-      // 3) Normal mouseDown / mouseUp / mouseMove
+      // Normal mouse move / click
       const adjusted = {
         type: 'mouse',
-        subtype: event.subtype,          // 'mouseDown', 'mouseUp', 'mouseMove'
+        subtype: event.subtype,
         x: adjX,
         y: adjY,
         button: event.button || 'left',
@@ -929,11 +784,12 @@
 
       const dot = ensureDebugDot();
       dot.style.left = (adjX - 4) + 'px';
-      dot.style.top  = (adjY - 4) + 'px';
+      dot.style.top = (adjY - 4) + 'px';
       dot.style.display = 'block';
 
       ipcRenderer.send('remote-control-event', adjusted);
     });
+
     // expose for buttons
     window.submitForm = submitForm;
     window.startRemoteAssist = startRemoteAssist;
