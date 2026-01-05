@@ -6,7 +6,8 @@ const {
   app,
   BrowserWindow,
   ipcMain,
-  desktopCapturer
+  desktopCapturer,
+  screen
 } = require('electron');
 const path = require('path');
 
@@ -103,6 +104,15 @@ ipcMain.on('focus-window', () => {
   if (!mainWindow) return;
   mainWindow.show();
   mainWindow.focus();
+});
+
+// Primary display bounds (for desktop-sharing geometry)
+ipcMain.handle('get-primary-display-bounds', () => {
+  const display = screen.getPrimaryDisplay();
+  // use workAreaSize (excludes menu bar / dock) or size; either is fine as long as
+  // we use the same space on both sides
+  const { width, height } = display.size;
+  return { width, height };
 });
 
 // -----------------------------------------
