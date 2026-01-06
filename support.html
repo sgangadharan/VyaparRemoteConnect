@@ -5,15 +5,19 @@
     <title>Support Agent - Remote Assist</title>
     <style>
       body {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         margin: 20px;
       }
 
       video {
         max-width: 100%;
+        width: 800px;
         border: 2px solid #333;
         border-radius: 8px;
         background: #000;
+        /* IMPORTANT: preserve aspect ratio (black bars may appear) */
+        object-fit: contain;
+        touch-action: none; /* prevent browser gestures interfering with pointer events */
       }
 
       .info {
@@ -23,6 +27,7 @@
   </head>
   <body>
     <h1>Support Agent Console</h1>
+
     <div class="info">
       <div>
         Session Key:
@@ -40,280 +45,285 @@
       </small>
     </div>
 
-    <video
-      id="remoteVideo"
-      autoplay
-      playsinline
-      muted
-      style="max-width: 100%; width: 800px; background: #000; border: 2px solid #333; border-radius: 8px;"
-    ></video>
+    <video id="remoteVideo" autoplay playsinline muted></video>
 
-    <!-- Socket.IO (no integrity / crossorigin, to avoid blocking) -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
       // Dynamic session ID, set after Join Session
-      let sessionId = null;       // change from const → let
-      let sessionActive = false;  // new flag
+      let sessionId = null;
+      let sessionActive = false;
 
-      // If support.html is served from the same host/port as server.js (4000):
-      const socket = io(); // auto-connects to current origin
-      // or explicitly:
-      // const socket = io('http://135.13.10.157:4000');
+      const socket = io(); // or io('http://135.13.10.157:4000');
 
+      // NOTE: You currently create pc once. If you want multiple sessions without reload,
+      // you should recreate pc on every join. Keeping your structure for now.
       const pc = new RTCPeerConnection({
         iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          {
-            urls: 'turn:global.relay.metered.ca:80',
-            username: 'openai',
-            credential: 'openai'
-          },
-          {
-            urls: 'turn:global.relay.metered.ca:443',
-            username: 'openai',
-            credential: 'openai'
-          },
-          {
-            urls: 'turn:global.relay.metered.ca:443?transport=tcp',
-            username: 'openai',
-            credential: 'openai'
-          }
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "turn:global.relay.metered.ca:80", username: "openai", credential: "openai" },
+          { urls: "turn:global.relay.metered.ca:443", username: "openai", credential: "openai" },
+          { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openai", credential: "openai" }
         ]
       });
 
-      // FULL WINDOW size (DIP)
+      // appWidth/appHeight MUST represent the SAME coordinate system the client expects.
+      // In your current design, client sends these via 'app-dimensions' and uses them for mapping.
       let appWidth = 800;
       let appHeight = 600;
 
-      const video = document.getElementById('remoteVideo');
+      const video = document.getElementById("remoteVideo");
 
-      socket.on('connect', () => {
-        console.log('AGENT: connected to signaling server, id =', socket.id);
-        console.log('AGENT: waiting for session key before joining a room');
+      socket.on("connect", () => {
+        console.log("AGENT: connected to signaling server, id =", socket.id);
+        console.log("AGENT: waiting for session key before joining a room");
       });
 
-      // Join a session when the button is clicked
       function joinSession() {
-        const key = document.getElementById('agentSessionInput').value.trim();
+        const key = document.getElementById("agentSessionInput").value.trim();
         if (!key) {
-          alert('Please enter a Session Key to join.');
+          alert("Please enter a Session Key to join.");
           return;
         }
         sessionId = key;
         sessionActive = true;
-        console.log('AGENT: joining session', sessionId);
-        socket.emit('register', { role: 'agent', sessionId });
+        console.log("AGENT: joining session", sessionId);
+        socket.emit("register", { role: "agent", sessionId });
       }
 
-      document.getElementById('joinSessionBtn').addEventListener('click', joinSession);
+      document.getElementById("joinSessionBtn").addEventListener("click", joinSession);
 
-      // Dimensions from customer (FULL WINDOW bounds)
-      socket.on('app-dimensions', ({ width, height }) => {
+      // Dimensions from customer
+      socket.on("app-dimensions", ({ width, height }) => {
         appWidth = width;
         appHeight = height;
-        console.log('AGENT: window dimensions from customer:', appWidth, appHeight);
+        console.log("AGENT: app-dimensions from customer:", appWidth, appHeight);
       });
 
       // WebRTC: ICE + offer/answer
       pc.onicecandidate = (event) => {
         if (!event.candidate) return;
         if (!sessionId) {
-          console.warn('AGENT: ICE candidate but no sessionId yet, ignoring');
+          console.warn("AGENT: ICE candidate but no sessionId yet, ignoring");
           return;
         }
-        console.log('AGENT: sending ICE candidate');
-        socket.emit('ice-candidate', { sessionId, candidate: event.candidate });
+        socket.emit("ice-candidate", { sessionId, candidate: event.candidate });
       };
 
-      socket.on('offer', async ({ offer }) => {
-        console.log('AGENT: received OFFER');
+      socket.on("offer", async ({ offer }) => {
+        console.log("AGENT: received OFFER");
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          console.log('AGENT: sending ANSWER');
+
           if (!sessionId) {
-            console.warn('AGENT: got offer but no sessionId yet, ANSWER will not be routed correctly');
+            console.warn("AGENT: got offer but no sessionId yet, ANSWER will not be routed correctly");
             return;
           }
-          socket.emit('answer', { sessionId, answer });
+          socket.emit("answer", { sessionId, answer });
         } catch (e) {
-          console.error('AGENT: error handling offer:', e);
+          console.error("AGENT: error handling offer:", e);
         }
       });
 
-      socket.on('ice-candidate', async ({ candidate }) => {
-        console.log('AGENT: received ICE candidate from customer');
+      socket.on("ice-candidate", async ({ candidate }) => {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('AGENT: error adding ICE candidate:', e);
+          console.error("AGENT: error adding ICE candidate:", e);
         }
       });
 
-      socket.on('session-ended', ({ sessionId: endedId, reason }) => {
-        console.log('AGENT: session ended by client:', endedId, reason);
+      socket.on("session-ended", ({ sessionId: endedId, reason }) => {
+        console.log("AGENT: session ended by client:", endedId, reason);
         sessionActive = false;
 
         try {
           if (pc) {
-            pc.getSenders().forEach(s => pc.removeTrack(s));
+            pc.getSenders().forEach((s) => pc.removeTrack(s));
             pc.close();
           }
         } catch (e) {
-          console.error('AGENT: error closing peer connection after session end', e);
+          console.error("AGENT: error closing peer connection after session end", e);
         }
 
-        //pc = null;
         video.srcObject = null;
 
-        alert('Remote session was stopped by the customer. This page will now refresh.');
-        window.location.reload();   // 🔁 simple reset UX
+        alert("Remote session was stopped by the customer. This page will now refresh.");
+        window.location.reload();
       });
 
       // Attach remote stream
       pc.ontrack = (event) => {
-        console.log('AGENT: ontrack fired, attaching stream to video');
+        console.log("AGENT: ontrack fired, attaching stream to video");
         const [stream] = event.streams;
         video.srcObject = stream;
-        video.muted = true;
-        video.playsInline = true;
 
         video.onloadedmetadata = () => {
           console.log(
-            'AGENT: video metadata loaded, videoWidth=',
+            "AGENT: video metadata loaded, videoWidth=",
             video.videoWidth,
-            'videoHeight=',
+            "videoHeight=",
             video.videoHeight
           );
 
+          // Optional safety: if customer didn't send app-dimensions yet,
+          // we can temporarily use actual video dimensions.
+          if (!appWidth || !appHeight) {
+            appWidth = video.videoWidth || appWidth;
+            appHeight = video.videoHeight || appHeight;
+          }
+
           const playPromise = video.play();
-          if (playPromise && typeof playPromise.then === 'function') {
-            playPromise
-              .then(() => console.log('AGENT: video playback started'))
-              .catch((err) => console.error('AGENT: video play() blocked/failed:', err));
+          if (playPromise && typeof playPromise.then === "function") {
+            playPromise.catch((err) => console.error("AGENT: video play() blocked/failed:", err));
           }
         };
       };
 
-      // ---------------------------------
-      // Map video coords -> WINDOW coords
-      // ---------------------------------
-      function mapToWindowCoords(evt) {
+      // -------------------------------------------------------
+      // Correct mapping: pointer position -> DRAWN VIDEO REGION
+      // (handles letterboxing/pillarboxing from object-fit:contain)
+      // -------------------------------------------------------
+      function mapToAppCoords(evt) {
+        if (!video.videoWidth || !video.videoHeight) return null;
+
         const rect = video.getBoundingClientRect();
+        const elementW = rect.width;
+        const elementH = rect.height;
 
-        const relX = (evt.clientX - rect.left) / rect.width;
-        const relY = (evt.clientY - rect.top) / rect.height;
+        const videoAR = video.videoWidth / video.videoHeight;
+        const elementAR = elementW / elementH;
 
+        let drawW, drawH, offsetX, offsetY;
+
+        if (elementAR > videoAR) {
+          // element is wider than video: vertical fit, bars on left/right
+          drawH = elementH;
+          drawW = drawH * videoAR;
+          offsetX = (elementW - drawW) / 2;
+          offsetY = 0;
+        } else {
+          // element is taller than video: horizontal fit, bars top/bottom
+          drawW = elementW;
+          drawH = drawW / videoAR;
+          offsetX = 0;
+          offsetY = (elementH - drawH) / 2;
+        }
+
+        const xInEl = evt.clientX - rect.left;
+        const yInEl = evt.clientY - rect.top;
+
+        const xInDraw = xInEl - offsetX;
+        const yInDraw = yInEl - offsetY;
+
+        // If pointer is in the black bars, ignore (prevents crazy drift)
+        if (xInDraw < 0 || yInDraw < 0 || xInDraw > drawW || yInDraw > drawH) {
+          return null;
+        }
+
+        const relX = xInDraw / drawW;
+        const relY = yInDraw / drawH;
+
+        // Scale into customer's coordinate system (appWidth/appHeight)
         const x = relX * appWidth;
         const y = relY * appHeight;
 
         return { x, y };
       }
 
-      // Mouse MOVE
+      // -----------------------
+      // Mouse MOVE (throttled)
+      // -----------------------
       let lastMoveSent = 0;
-      const MOVE_THROTTLE_MS = 50;
+      const MOVE_THROTTLE_MS = 16; // smoother than 50ms, ~60fps cap
 
-      video.addEventListener('mousemove', (evt) => {
-        if (!sessionActive) return;
-        if (!video.videoWidth || !video.videoHeight) return;
-        if (!sessionId) return;
+      video.addEventListener("mousemove", (evt) => {
+        if (!sessionActive || !sessionId) return;
 
         const now = Date.now();
         if (now - lastMoveSent < MOVE_THROTTLE_MS) return;
         lastMoveSent = now;
 
-        const { x, y } = mapToWindowCoords(evt);
+        const pt = mapToAppCoords(evt);
+        if (!pt) return;
 
-        socket.emit('control-event', {
+        socket.emit("control-event", {
           sessionId,
           event: {
-            type: 'mouse',
-            subtype: 'mouseMove',
-            x,
-            y,
-            button: 'left'
+            type: "mouse",
+            subtype: "mouseMove",
+            x: pt.x,
+            y: pt.y,
+            button: "left"
           }
         });
       });
 
-      // Mouse CLICK
-      video.addEventListener('click', (evt) => {
-        if (!sessionActive) return;
-        if (!sessionId) return;
+      // -----------------------
+      // Mouse CLICK (pointerdown/up)
+      // -----------------------
+      video.addEventListener("pointerdown", (evt) => {
+        if (!sessionActive || !sessionId) return;
+        if (evt.button !== 0) return; // left click only
 
+        // ensure video plays
         if (video.paused) {
           const playPromise = video.play();
-          if (playPromise && typeof playPromise.then === 'function') {
-            playPromise.catch((err) => {
-              console.error('AGENT: video play() failed on click:', err);
-            });
+          if (playPromise && typeof playPromise.then === "function") {
+            playPromise.catch((err) => console.error("AGENT: video play() failed on pointerdown:", err));
           }
         }
 
-        if (!video.videoWidth || !video.videoHeight) {
-          console.log('AGENT: click ignored, video not ready yet');
-          return;
-        }
+        const pt = mapToAppCoords(evt);
+        if (!pt) return;
 
-        const { x, y } = mapToWindowCoords(evt);
-        console.log('AGENT: sending click at window coords', { x, y });
-
-        socket.emit('control-event', {
+        socket.emit("control-event", {
           sessionId,
-          event: {
-            type: 'mouse',
-            subtype: 'mouseDown',
-            x,
-            y,
-            button: 'left'
-          }
-        });
-
-        socket.emit('control-event', {
-          sessionId,
-          event: {
-            type: 'mouse',
-            subtype: 'mouseUp',
-            x,
-            y,
-            button: 'left'
-          }
+          event: { type: "mouse", subtype: "mouseDown", x: pt.x, y: pt.y, button: "left" }
         });
       });
 
-      // Mouse WHEEL (scroll)
-      video.addEventListener(
-        'wheel',
-        (evt) => {
-          if (!sessionActive) return;
-          if (!sessionId) return;
-          if (!video.videoWidth || !video.videoHeight) return;
+      video.addEventListener("pointerup", (evt) => {
+        if (!sessionActive || !sessionId) return;
+        if (evt.button !== 0) return;
 
-          // prevent the browser page from scrolling instead
+        const pt = mapToAppCoords(evt);
+        if (!pt) return;
+
+        socket.emit("control-event", {
+          sessionId,
+          event: { type: "mouse", subtype: "mouseUp", x: pt.x, y: pt.y, button: "left" }
+        });
+      });
+
+      // Prevent context menu interfering
+      video.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      // -----------------------
+      // Mouse WHEEL (scroll)
+      // -----------------------
+      video.addEventListener(
+        "wheel",
+        (evt) => {
+          if (!sessionActive || !sessionId) return;
           evt.preventDefault();
 
-          const { x, y } = mapToWindowCoords(evt);
+          const pt = mapToAppCoords(evt);
+          if (!pt) return;
 
-          // Use discrete steps instead of tiny trackpad floats
-          const STEP = 120; // standard scroll step
-
-          const deltaY =
-            evt.deltaY > 0 ? STEP : evt.deltaY < 0 ? -STEP : 0;
-          const deltaX =
-            evt.deltaX > 0 ? STEP : evt.deltaX < 0 ? -STEP : 0;
-
-          // If no meaningful movement, skip
+          const STEP = 120;
+          const deltaY = evt.deltaY > 0 ? STEP : evt.deltaY < 0 ? -STEP : 0;
+          const deltaX = evt.deltaX > 0 ? STEP : evt.deltaX < 0 ? -STEP : 0;
           if (!deltaX && !deltaY) return;
 
-          socket.emit('control-event', {
+          socket.emit("control-event", {
             sessionId,
             event: {
-              type: 'mouse',
-              subtype: 'mouseWheel',
-              x,
-              y,
+              type: "mouse",
+              subtype: "mouseWheel",
+              x: pt.x,
+              y: pt.y,
               deltaX,
               deltaY
             }
@@ -322,16 +332,16 @@
         { passive: false }
       );
 
+      // -----------------------
       // Keyboard forwarding
-      window.addEventListener('keydown', (evt) => {
-        if (!sessionActive) return;
-        if (!sessionId) return;
-
-        socket.emit('control-event', {
+      // -----------------------
+      window.addEventListener("keydown", (evt) => {
+        if (!sessionActive || !sessionId) return;
+        socket.emit("control-event", {
           sessionId,
           event: {
-            type: 'keyboard',
-            subtype: 'keyDown',
+            type: "keyboard",
+            subtype: "keyDown",
             key: evt.key,
             code: evt.code,
             altKey: evt.altKey,
@@ -343,15 +353,13 @@
         evt.preventDefault();
       });
 
-      window.addEventListener('keyup', (evt) => {
-        if (!sessionActive) return;
-        if (!sessionId) return;
-
-        socket.emit('control-event', {
+      window.addEventListener("keyup", (evt) => {
+        if (!sessionActive || !sessionId) return;
+        socket.emit("control-event", {
           sessionId,
           event: {
-            type: 'keyboard',
-            subtype: 'keyUp',
+            type: "keyboard",
+            subtype: "keyUp",
             key: evt.key,
             code: evt.code,
             altKey: evt.altKey,

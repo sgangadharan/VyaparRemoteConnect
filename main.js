@@ -1,7 +1,7 @@
 // main.js
 // Demo-only: remote assist + window capture for a single BrowserWindow.
 // NOTE: nodeIntegration/contextIsolation are relaxed here for simplicity.
-// main.js
+
 const {
   app,
   BrowserWindow,
@@ -9,6 +9,7 @@ const {
   desktopCapturer,
   screen
 } = require('electron');
+
 const path = require('path');
 
 let mainWindow;
@@ -52,25 +53,63 @@ ipcMain.handle('get-app-window-source-id', async () => {
     thumbnailSize: { width: 400, height: 300 }
   });
 
-  console.log('desktopCapturer sources in main:', sources.map(s => s.name));
+  console.log('desktopCapturer window sources:', sources.map(s => s.name));
 
   const src = sources.find(s => s.name.includes('Electron Remote Assist Demo'));
   return src ? src.id : null;
 });
 
-// Used by renderer to find a SCREEN source (entire desktop)
+// OLD: returns first screen source (not safe for multi-monitor)
+// Keeping it for reference, but you should use get-desktop-source-for-window instead.
 ipcMain.handle('get-desktop-source-id', async () => {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 400, height: 300 }
   });
-
-  console.log('desktopCapturer screen sources:',sources.map(s => ({ id: s.id, name: s.name }))
-  );
-
-  // Simple: pick the first screen (primary). For multi-monitor UI you can expose these to the user.
   const primaryScreen = sources[0];
   return primaryScreen ? primaryScreen.id : null;
+});
+
+// ✅ NEW: choose the screen source that matches the display where this window lives
+ipcMain.handle('get-desktop-source-for-window', async () => {
+  if (!mainWindow) return null;
+
+  const winBounds = mainWindow.getBounds(); // DIP
+  const display = screen.getDisplayMatching(winBounds);
+
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 400, height: 300 }
+  });
+
+  // Electron provides source.display_id for screen sources (string)
+  // screen.getDisplayMatching provides display.id (number)
+  const displayIdStr = String(display.id);
+
+  const matching = sources.find(s => s.display_id === displayIdStr) || null;
+
+  console.log('get-desktop-source-for-window:',
+    'display.id=', display.id,
+    'scaleFactor=', display.scaleFactor,
+    'bounds=', display.bounds,
+    'matchedSource=', matching ? { id: matching.id, name: matching.name, display_id: matching.display_id } : null
+  );
+
+  if (!matching) {
+    // fallback: primary
+    const fallback = sources[0] || null;
+    return fallback ? {
+      sourceId: fallback.id,
+      scaleFactor: display.scaleFactor || 1,
+      bounds: display.bounds
+    } : null;
+  }
+
+  return {
+    sourceId: matching.id,
+    scaleFactor: display.scaleFactor || 1,
+    bounds: display.bounds // DIP global origin of that display
+  };
 });
 
 // Full window bounds (what the captured video shows)
@@ -94,7 +133,6 @@ ipcMain.handle('get-window-offset', () => {
   const win = mainWindow.getBounds();
   const content = mainWindow.getContentBounds();
 
-  // For a normal framed window, content.y is usually win.y + titlebarHeight
   const offsetTop = content.y - win.y;
   return { offsetTop };
 });
@@ -106,39 +144,13 @@ ipcMain.on('focus-window', () => {
   mainWindow.focus();
 });
 
-// Primary display bounds (for desktop-sharing geometry)
-ipcMain.handle('get-primary-display-bounds', () => {
-  const display = screen.getPrimaryDisplay();
-  // use workAreaSize (excludes menu bar / dock) or size; either is fine as long as
-  // we use the same space on both sides
-  const { width, height } = display.size;
-  return { width, height };
-});
-
 // -----------------------------------------
 // Remote control events from renderer
 // -----------------------------------------
-// ipcMain.on('remote-control-event', (event, data) => {
-//   if (!mainWindow) return;
-
-//   if (data.type === 'mouse') {
-//     // Mouse path – unchanged
-//     mainWindow.webContents.sendInputEvent({
-//       type: data.subtype,        // 'mouseDown', 'mouseUp', 'mouseMove'
-//       x: Math.round(data.x),
-//       y: Math.round(data.y),
-//       button: data.button || 'left',
-//       clickCount: 1
-//     });
-
-//   } 
-// });
 ipcMain.on('remote-control-event', (event, data) => {
   if (!mainWindow) return;
 
-  // Mouse path (including scroll)
   if (data.type === 'mouse') {
-    // Special case: wheel / scroll
     if (data.subtype === 'mouseWheel') {
       const x = Math.round(data.x || 0);
       const y = Math.round(data.y || 0);
@@ -152,7 +164,6 @@ ipcMain.on('remote-control-event', (event, data) => {
         y,
         deltaX,
         deltaY,
-        // these extra fields matter for Chromium actually scrolling
         wheelTicksX: deltaX,
         wheelTicksY: deltaY,
         accelerationRatioX: 1,
@@ -161,86 +172,54 @@ ipcMain.on('remote-control-event', (event, data) => {
         canScroll: true
       };
 
-      console.log('MAIN injecting mouseWheel event:', wheelEvent);
       mainWindow.webContents.sendInputEvent(wheelEvent);
       return;
     }
 
-    // For normal mouseDown / mouseUp / mouseMove, delegate to helper
-    handleRemoteMouse(mainWindow, data);
-    return;
-  }
-
-  // Keyboard path
-  if (data.type === 'keyboard') {
-    handleRemoteKeyboard(mainWindow, data);
-    return;
-  }
-
-  console.warn('MAIN: unknown remote-control-event type:', data.type, data);
-});
-
-// Mouse injection (content coordinates)
-function handleRemoteMouse(win, data) {
-  if (data.type === 'mouse') {
-    // Mouse path – unchanged
-    console.log('MAIN injecting mouse event:',data);
+    // normal mouse events
     mainWindow.webContents.sendInputEvent({
-      type: data.subtype,        // 'mouseDown', 'mouseUp', 'mouseMove'
+      type: data.subtype, // mouseDown/mouseUp/mouseMove
       x: Math.round(data.x),
       y: Math.round(data.y),
       button: data.button || 'left',
       clickCount: 1
     });
-    
-  } 
-
-  
-  //win.webContents.sendInputEvent(mouseEvent);
-}
-
-// Keyboard injection
-function handleRemoteKeyboard(win, ev) {
-  console.log('MAIN injecting keyboard event:', ev);
-
-  // Build Electron-style modifiers array
-  const modifiers = [];
-  if (ev.altKey)   modifiers.push('alt');
-  if (ev.shiftKey) modifiers.push('shift');
-  if (ev.ctrlKey)  modifiers.push('control');
-  if (ev.metaKey)  modifiers.push('meta');
-
-  // Map DOM key → Electron keyCode
-  let keyCode;
-
-  if (ev.key && ev.key.length === 1) {
-    // Single character: 'a', 'A', '1', etc.
-    keyCode = ev.key;
-  } else {
-    // Some common non-character keys
-    const map = {
-      Enter: 'Enter',
-      Backspace: 'Backspace',
-      Tab: 'Tab',
-      Escape: 'Escape',
-      ArrowUp: 'Up',
-      ArrowDown: 'Down',
-      ArrowLeft: 'Left',
-      ArrowRight: 'Right',
-      Delete: 'Delete',
-      Home: 'Home',
-      End: 'End',
-      PageUp: 'PageUp',
-      PageDown: 'PageDown'
-    };
-
-    keyCode = map[ev.key] || ev.key || ev.code || '';
+    return;
   }
 
-  // Inject keyDown / keyUp
-  win.webContents.sendInputEvent({
-    type: ev.subtype,     // 'keyDown' or 'keyUp'
-    keyCode,
-    modifiers
-  });
-}
+  if (data.type === 'keyboard') {
+    const modifiers = [];
+    if (data.altKey) modifiers.push('alt');
+    if (data.shiftKey) modifiers.push('shift');
+    if (data.ctrlKey) modifiers.push('control');
+    if (data.metaKey) modifiers.push('meta');
+
+    let keyCode;
+    if (data.key && data.key.length === 1) keyCode = data.key;
+    else {
+      const map = {
+        Enter: 'Enter',
+        Backspace: 'Backspace',
+        Tab: 'Tab',
+        Escape: 'Escape',
+        ArrowUp: 'Up',
+        ArrowDown: 'Down',
+        ArrowLeft: 'Left',
+        ArrowRight: 'Right',
+        Delete: 'Delete',
+        Home: 'Home',
+        End: 'End',
+        PageUp: 'PageUp',
+        PageDown: 'PageDown'
+      };
+      keyCode = map[data.key] || data.key || data.code || '';
+    }
+
+    mainWindow.webContents.sendInputEvent({
+      type: data.subtype, // keyDown/keyUp
+      keyCode,
+      modifiers
+    });
+    return;
+  }
+});
