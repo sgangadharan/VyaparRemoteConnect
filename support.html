@@ -22,6 +22,86 @@
         user-select: none;
       }
 
+      #joinSessionBtn {
+        background-color: #0066ff;
+        color: #ffffff;
+        border: none;
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      #joinSessionBtn:disabled {
+        background-color: #9bbcff;
+        cursor: not-allowed;
+        opacity: 0.8;
+      }
+
+      #leaveSessionBtn {
+        background-color: #777;
+        color: #ffffff;
+        border: none;
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-left: 8px;
+      }
+
+      #leaveSessionBtn:hover {
+        background-color: #555;
+      }
+
+      #leaveSessionBtn:disabled {
+        background-color: #c7c7c7;
+        cursor: not-allowed;
+        opacity: 0.8;
+      }
+
+      #connBadge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: 10px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid #ddd;
+        background: #f7f7f7;
+        user-select: none;
+      }
+
+      #connBadge::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        background: #9e9e9e;
+      }
+
+      #connBadge.connected {
+        border-color: #b7e4c7;
+        background: #f0fff4;
+        color: #1b5e20;
+      }
+
+      #connBadge.connected::before {
+        background: #2ecc71;
+      }
+
+      #connBadge.disconnected {
+        border-color: #eee;
+        background: #f7f7f7;
+        color: #555;
+      }
+
+      #connBadge.disconnected::before {
+        background: #9e9e9e;
+      }
+
       .info {
         margin-bottom: 10px;
       }
@@ -40,6 +120,8 @@
           style="width: 200px;"
         />
         <button id="joinSessionBtn">Join Session</button>
+        <button id="leaveSessionBtn" disabled>Leave Session</button>
+        <span id="connBadge" class="disconnected">Disconnected</span>
       </div>
       <small>
         Open this page and join the correct session key before the customer clicks
@@ -57,16 +139,59 @@
 
       const socket = io(); // or io('http://135.13.10.157:4000');
 
-      // NOTE: You currently create pc once. If you want multiple sessions without reload,
-      // you should recreate pc on every join. Keeping your structure for now.
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "turn:global.relay.metered.ca:80", username: "openai", credential: "openai" },
-          { urls: "turn:global.relay.metered.ca:443", username: "openai", credential: "openai" },
-          { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openai", credential: "openai" }
-        ]
-      });
+      // Recreate PC per session so agent can Leave/Join without page reload
+      let pc = null;
+
+      function createPeerConnection() {
+        const newPc = new RTCPeerConnection({
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "turn:global.relay.metered.ca:80", username: "openai", credential: "openai" },
+            { urls: "turn:global.relay.metered.ca:443", username: "openai", credential: "openai" },
+            { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openai", credential: "openai" }
+          ]
+        });
+
+        // WebRTC: ICE candidate forwarding
+        newPc.onicecandidate = (event) => {
+          if (!event.candidate) return;
+          if (!sessionId) {
+            console.warn("AGENT: ICE candidate but no sessionId yet, ignoring");
+            return;
+          }
+          socket.emit("ice-candidate", { sessionId, candidate: event.candidate });
+        };
+
+        // Attach remote stream
+        newPc.ontrack = (event) => {
+          console.log("AGENT: ontrack fired, attaching stream to video");
+          const [stream] = event.streams;
+          video.srcObject = stream;
+
+          video.onloadedmetadata = () => {
+            console.log(
+              "AGENT: video metadata loaded, videoWidth=",
+              video.videoWidth,
+              "videoHeight=",
+              video.videoHeight
+            );
+
+            // Optional safety: if customer didn't send app-dimensions yet,
+            // we can temporarily use actual video dimensions.
+            if (!appWidth || !appHeight) {
+              appWidth = video.videoWidth || appWidth;
+              appHeight = video.videoHeight || appHeight;
+            }
+
+            const playPromise = video.play();
+            if (playPromise && typeof playPromise.then === "function") {
+              playPromise.catch((err) => console.error("AGENT: video play() blocked/failed:", err));
+            }
+          };
+        };
+
+        return newPc;
+      }
 
       // appWidth/appHeight MUST represent the SAME coordinate system the client expects.
       // In your current design, client sends these via 'app-dimensions' and uses them for mapping.
@@ -74,6 +199,37 @@
       let appHeight = 600;
 
       const video = document.getElementById("remoteVideo");
+      const joinBtn = document.getElementById("joinSessionBtn");
+      const leaveBtn = document.getElementById("leaveSessionBtn");
+      const connBadge = document.getElementById("connBadge");
+
+      function setConnectionUI(connected) {
+        if (!connBadge) return;
+        if (connected) {
+          connBadge.classList.remove("disconnected");
+          connBadge.classList.add("connected");
+          connBadge.textContent = "Connected";
+        } else {
+          connBadge.classList.remove("connected");
+          connBadge.classList.add("disconnected");
+          connBadge.textContent = "Disconnected";
+        }
+      }
+
+      function closePeerConnection() {
+        try {
+          if (pc) {
+            try { pc.getSenders().forEach((s) => pc.removeTrack(s)); } catch {}
+            try { pc.close(); } catch {}
+          }
+        } finally {
+          pc = null;
+        }
+        video.srcObject = null;
+      }
+
+      // Initial UI
+      setConnectionUI(false);
 
       socket.on("connect", () => {
         console.log("AGENT: connected to signaling server, id =", socket.id);
@@ -86,13 +242,47 @@
           alert("Please enter a Session Key to join.");
           return;
         }
+
+        // If already in a session, do nothing
+        if (sessionActive) return;
+
+        // Fresh PC for this session
+        closePeerConnection();
+        pc = createPeerConnection();
+
         sessionId = key;
         sessionActive = true;
         console.log("AGENT: joining session", sessionId);
         socket.emit("register", { role: "agent", sessionId });
+
+        joinBtn.disabled = true;
+        joinBtn.textContent = "Session Active";
+        leaveBtn.disabled = false;
+        setConnectionUI(true);
       }
 
       document.getElementById("joinSessionBtn").addEventListener("click", joinSession);
+
+      function leaveSession() {
+        if (!sessionActive) return;
+
+        console.log("AGENT: leaving session", sessionId);
+
+        // Stop sending events + reset session state
+        sessionActive = false;
+        sessionId = null;
+
+        // Tear down media/pc
+        closePeerConnection();
+
+        // Reset UI
+        joinBtn.disabled = false;
+        joinBtn.textContent = "Join Session";
+        leaveBtn.disabled = true;
+        setConnectionUI(false);
+      }
+
+      leaveBtn.addEventListener("click", leaveSession);
 
       // Dimensions from customer
       socket.on("app-dimensions", ({ width, height }) => {
@@ -101,18 +291,12 @@
         console.log("AGENT: app-dimensions from customer:", appWidth, appHeight);
       });
 
-      // WebRTC: ICE + offer/answer
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) return;
-        if (!sessionId) {
-          console.warn("AGENT: ICE candidate but no sessionId yet, ignoring");
-          return;
-        }
-        socket.emit("ice-candidate", { sessionId, candidate: event.candidate });
-      };
-
       socket.on("offer", async ({ offer }) => {
         console.log("AGENT: received OFFER");
+        if (!pc) {
+          console.warn("AGENT: received offer but no active peer connection (did you leave the session?)");
+          return;
+        }
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
           const answer = await pc.createAnswer();
@@ -129,6 +313,7 @@
       });
 
       socket.on("ice-candidate", async ({ candidate }) => {
+        if (!pc) return;
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
@@ -138,50 +323,23 @@
 
       socket.on("session-ended", ({ sessionId: endedId, reason }) => {
         console.log("AGENT: session ended by client:", endedId, reason);
-        sessionActive = false;
 
-        try {
-          if (pc) {
-            pc.getSenders().forEach((s) => pc.removeTrack(s));
-            pc.close();
-          }
-        } catch (e) {
-          console.error("AGENT: error closing peer connection after session end", e);
+        // Cleanly leave without reloading
+        if (typeof leaveSession === "function") {
+          leaveSession();
+        } else {
+          // fallback
+          sessionActive = false;
+          sessionId = null;
+          closePeerConnection();
+          joinBtn.disabled = false;
+          joinBtn.textContent = "Join Session";
+          leaveBtn.disabled = true;
+          setConnectionUI(false);
         }
 
-        video.srcObject = null;
-
-        alert("Remote session was stopped by the customer. This page will now refresh.");
-        window.location.reload();
+        alert("Remote session was stopped by the customer.");
       });
-
-      // Attach remote stream
-      pc.ontrack = (event) => {
-        console.log("AGENT: ontrack fired, attaching stream to video");
-        const [stream] = event.streams;
-        video.srcObject = stream;
-
-        video.onloadedmetadata = () => {
-          console.log(
-            "AGENT: video metadata loaded, videoWidth=",
-            video.videoWidth,
-            "videoHeight=",
-            video.videoHeight
-          );
-
-          // Optional safety: if customer didn't send app-dimensions yet,
-          // we can temporarily use actual video dimensions.
-          if (!appWidth || !appHeight) {
-            appWidth = video.videoWidth || appWidth;
-            appHeight = video.videoHeight || appHeight;
-          }
-
-          const playPromise = video.play();
-          if (playPromise && typeof playPromise.then === "function") {
-            playPromise.catch((err) => console.error("AGENT: video play() blocked/failed:", err));
-          }
-        };
-      };
 
       // -------------------------------------------------------
       // Correct mapping: pointer position -> DRAWN VIDEO REGION
@@ -241,7 +399,7 @@
       const MOVE_THROTTLE_MS = 16; // ~60fps
 
       video.addEventListener("mousemove", (evt) => {
-        if (!sessionActive || !sessionId) return;
+        if (!sessionActive || !sessionId || !pc) return;
         if (!video.videoWidth || !video.videoHeight) return;
 
         const now = Date.now();
@@ -267,7 +425,7 @@
       // Mouse CLICK (pointerdown/up)
       // -----------------------
       video.addEventListener("pointerdown", (evt) => {
-        if (!sessionActive || !sessionId) return;
+        if (!sessionActive || !sessionId || !pc) return;
         if (evt.button !== 0) return; // left click only
 
         // ensure video plays
@@ -288,7 +446,7 @@
       });
 
       video.addEventListener("pointerup", (evt) => {
-        if (!sessionActive || !sessionId) return;
+        if (!sessionActive || !sessionId || !pc) return;
         if (evt.button !== 0) return;
 
         const pt = mapToAppCoords(evt);
@@ -309,7 +467,7 @@
       video.addEventListener(
         "wheel",
         (evt) => {
-          if (!sessionActive || !sessionId) return;
+          if (!sessionActive || !sessionId || !pc) return;
           evt.preventDefault();
 
           const pt = mapToAppCoords(evt);
@@ -339,7 +497,7 @@
       // Keyboard forwarding
       // -----------------------
       window.addEventListener("keydown", (evt) => {
-        if (!sessionActive || !sessionId) return;
+        if (!sessionActive || !sessionId || !pc) return;
         socket.emit("control-event", {
           sessionId,
           event: {
@@ -357,7 +515,7 @@
       });
 
       window.addEventListener("keyup", (evt) => {
-        if (!sessionActive || !sessionId) return;
+        if (!sessionActive || !sessionId || !pc) return;
         socket.emit("control-event", {
           sessionId,
           event: {
