@@ -17,7 +17,9 @@
         background: #000;
         /* IMPORTANT: preserve aspect ratio (black bars may appear) */
         object-fit: contain;
+        display: block;
         touch-action: none; /* prevent browser gestures interfering with pointer events */
+        user-select: none;
       }
 
       .info {
@@ -217,7 +219,7 @@
         const xInDraw = xInEl - offsetX;
         const yInDraw = yInEl - offsetY;
 
-        // If pointer is in the black bars, ignore (prevents crazy drift)
+        // If pointer is in the black bars, ignore (prevents drift)
         if (xInDraw < 0 || yInDraw < 0 || xInDraw > drawW || yInDraw > drawH) {
           return null;
         }
@@ -236,10 +238,11 @@
       // Mouse MOVE (throttled)
       // -----------------------
       let lastMoveSent = 0;
-      const MOVE_THROTTLE_MS = 16; // smoother than 50ms, ~60fps cap
+      const MOVE_THROTTLE_MS = 16; // ~60fps
 
       video.addEventListener("mousemove", (evt) => {
         if (!sessionActive || !sessionId) return;
+        if (!video.videoWidth || !video.videoHeight) return;
 
         const now = Date.now();
         if (now - lastMoveSent < MOVE_THROTTLE_MS) return;

@@ -70,7 +70,7 @@ ipcMain.handle('get-desktop-source-id', async () => {
   return primaryScreen ? primaryScreen.id : null;
 });
 
-// ✅ NEW: choose the screen source that matches the display where this window lives
+// ✅ choose the screen source that matches the display where this window lives
 ipcMain.handle('get-desktop-source-for-window', async () => {
   if (!mainWindow) return null;
 
@@ -88,11 +88,13 @@ ipcMain.handle('get-desktop-source-for-window', async () => {
 
   const matching = sources.find(s => s.display_id === displayIdStr) || null;
 
-  console.log('get-desktop-source-for-window:',
+  console.log(
+    'get-desktop-source-for-window:',
     'display.id=', display.id,
     'scaleFactor=', display.scaleFactor,
     'bounds=', display.bounds,
-    'matchedSource=', matching ? { id: matching.id, name: matching.name, display_id: matching.display_id } : null
+    'matchedSource=',
+    matching ? { id: matching.id, name: matching.name, display_id: matching.display_id } : null
   );
 
   if (!matching) {
@@ -101,7 +103,7 @@ ipcMain.handle('get-desktop-source-for-window', async () => {
     return fallback ? {
       sourceId: fallback.id,
       scaleFactor: display.scaleFactor || 1,
-      bounds: display.bounds
+      bounds: display.bounds // DIP global origin of that display
     } : null;
   }
 
@@ -112,29 +114,31 @@ ipcMain.handle('get-desktop-source-for-window', async () => {
   };
 });
 
-// Full window bounds (what the captured video shows)
+// Full window bounds (DIP)
 ipcMain.handle('get-window-bounds', () => {
   if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
   const b = mainWindow.getBounds();
   return { x: b.x, y: b.y, width: b.width, height: b.height };
 });
 
-// Content bounds (what sendInputEvent uses)
+// Content bounds (DIP) (webContents coordinate space anchor)
 ipcMain.handle('get-content-bounds', () => {
   if (!mainWindow) return { width: 0, height: 0, x: 0, y: 0 };
   const b = mainWindow.getContentBounds();
   return { x: b.x, y: b.y, width: b.width, height: b.height };
 });
 
-// Offset between window top and content top (titlebar height etc.)
+// ✅ Offset between window top/left and content top/left (titlebar/sidebar width etc.)
 ipcMain.handle('get-window-offset', () => {
-  if (!mainWindow) return { offsetTop: 0 };
+  if (!mainWindow) return { offsetTop: 0, offsetLeft: 0 };
 
   const win = mainWindow.getBounds();
   const content = mainWindow.getContentBounds();
 
   const offsetTop = content.y - win.y;
-  return { offsetTop };
+  const offsetLeft = content.x - win.x;
+
+  return { offsetTop, offsetLeft };
 });
 
 // Focus helper
@@ -142,6 +146,9 @@ ipcMain.on('focus-window', () => {
   if (!mainWindow) return;
   mainWindow.show();
   mainWindow.focus();
+
+  // ✅ important: ensure the page actually receives events
+  try { mainWindow.webContents.focus(); } catch {}
 });
 
 // -----------------------------------------
@@ -151,6 +158,7 @@ ipcMain.on('remote-control-event', (event, data) => {
   if (!mainWindow) return;
 
   if (data.type === 'mouse') {
+    // Wheel / scroll
     if (data.subtype === 'mouseWheel') {
       const x = Math.round(data.x || 0);
       const y = Math.round(data.y || 0);
@@ -176,9 +184,10 @@ ipcMain.on('remote-control-event', (event, data) => {
       return;
     }
 
-    // normal mouse events
+    // Normal mouse events (mouseMove/mouseDown/mouseUp)
+    // NOTE: coords must already be CONTENT coords (webContents coords)
     mainWindow.webContents.sendInputEvent({
-      type: data.subtype, // mouseDown/mouseUp/mouseMove
+      type: data.subtype,
       x: Math.round(data.x),
       y: Math.round(data.y),
       button: data.button || 'left',

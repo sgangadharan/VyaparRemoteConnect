@@ -21,7 +21,6 @@
     }
 
     h1 { margin: 0 0 20px; text-align: center; }
-
     label { font-weight: 600; margin-top: 10px; display: block; text-align: left; }
 
     input {
@@ -34,6 +33,7 @@
       box-sizing: border-box;
     }
 
+    /* --- Custom dropdown styles --- */
     .dropdown {
       position: relative;
       margin-top: 6px;
@@ -45,9 +45,7 @@
       cursor: pointer;
       box-sizing: border-box;
     }
-
     .dropdown:focus { outline: 2px solid #0066ff; outline-offset: 2px; }
-
     .dropdown-selected { padding: 10px; user-select: none; }
 
     .dropdown-menu {
@@ -57,7 +55,7 @@
       background: #fff;
       border: 1px solid #ccc;
       border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
       z-index: 1000;
       display: none;
       max-height: 150px;
@@ -78,9 +76,7 @@
       font-size: 15px;
       cursor: pointer;
     }
-
     button:hover { background-color: #0053d6; }
-
     .button-secondary { background-color: #777; }
     .button-secondary:hover { background-color: #555; }
 
@@ -91,7 +87,6 @@
       margin-top: 25px;
       display: none;
     }
-
     .result-container h3 { margin: 0 0 10px; }
     .result-item { margin: 5px 0; font-size: 14px; }
 
@@ -118,7 +113,7 @@
       border: 1px solid #ffcc80;
     }
 
-    /* ✅ Dot in VIEWPORT coordinates (matches sendInputEvent coords) */
+    /* Debug dot in VIEWPORT coords (same coordinate system as sendInputEvent) */
     #remote-debug-dot {
       position: fixed;
       width: 10px;
@@ -203,17 +198,22 @@
     let remoteActive = false;
     let isPrimed = false;
 
-    // geometry (DIP)
+    // Window / content geometry (DIP)
     let windowWidth = 0, windowHeight = 0;
     let contentWidth = 0, contentHeight = 0;
-    let windowOffsetTop = 0;
-    let windowPosX = 0, windowPosY = 0;
+    let windowPosX = 0, windowPosY = 0;         // global screen DIP
+    let windowOffsetTop = 0, windowOffsetLeft = 0; // content offset within window (DIP)
 
-    // desktop capture metrics
-    let desktopScaleFactor = 1;
-    let desktopDisplayBounds = { x: 0, y: 0, width: 0, height: 0 }; // DIP global origin
+    // Desktop capture metrics
+    let desktopScaleFactor = 1; // reported by Electron (often px per DIP, but the capture stream may be downscaled)
+    let desktopDisplayBounds = { x: 0, y: 0, width: 0, height: 0 }; // global screen DIP origin for that display
 
-    // capture dims in pixels
+    // Effective pixels-per-DIP based on the *actual captured stream* size.
+    // This fixes drift when the stream is downscaled (common on Windows / some setups).
+    let desktopPxPerDipX = 1;
+    let desktopPxPerDipY = 1;
+
+    // Capture dims (pixels)
     let captureWidthPx = null, captureHeightPx = null;
 
     const shareModeSelect = document.getElementById('shareModeSelect');
@@ -230,20 +230,18 @@
       refreshShareWarning();
     });
 
-    // Dot helpers (viewport coords)
+    // Debug dot (viewport coords)
     let debugDot = null;
     function ensureDebugDot() {
       if (!debugDot) debugDot = document.getElementById('remote-debug-dot');
       return debugDot;
     }
-
     function showDotViewport(x, y) {
       const dot = ensureDebugDot();
       dot.style.left = `${x}px`;
       dot.style.top = `${y}px`;
       dot.style.display = 'block';
     }
-
     function hideDot() {
       ensureDebugDot().style.display = 'none';
     }
@@ -267,7 +265,7 @@
     }
 
     // ---------------------------
-    // Custom dropdown wiring (Sex)
+    // Dropdown wiring (Sex)
     // ---------------------------
     const sexHiddenInput = document.getElementById('sex');
     const sexDropdown = document.getElementById('sexDropdown');
@@ -283,24 +281,20 @@
       sexOpen = true;
       highlightSexItem(0);
     }
-
     function closeSexDropdown() {
       sexMenu.style.display = 'none';
       sexOpen = false;
       clearSexHighlight();
     }
-
     function setSex(value, label) {
       sexHiddenInput.value = value;
       sexSelected.textContent = label;
       closeSexDropdown();
     }
-
     function clearSexHighlight() {
       sexHighlightIndex = -1;
       sexItems.forEach(item => item.classList.remove('highlight'));
     }
-
     function highlightSexItem(index) {
       if (index < 0 || index >= sexItems.length) return;
       sexHighlightIndex = index;
@@ -444,9 +438,29 @@
           localStream = await getAppWindowStream();
           desktopScaleFactor = 1;
           desktopDisplayBounds = { x: 0, y: 0, width: 0, height: 0 };
+          desktopPxPerDipX = 1;
+          desktopPxPerDipY = 1;
         }
 
         readCapturePxFromStream(localStream);
+
+        // Derive effective px-per-DIP from the captured stream size.
+        // If the capture stream is scaled, captureWidthPx will NOT equal (displayBounds.width * desktopScaleFactor).
+        if (captureMode === 'desktop') {
+          const wDip = desktopDisplayBounds?.width || 0;
+          const hDip = desktopDisplayBounds?.height || 0;
+          if (captureWidthPx && captureHeightPx && wDip > 0 && hDip > 0) {
+            desktopPxPerDipX = captureWidthPx / wDip;
+            desktopPxPerDipY = captureHeightPx / hDip;
+          } else {
+            // Fallback (best effort)
+            desktopPxPerDipX = desktopScaleFactor || 1;
+            desktopPxPerDipY = desktopScaleFactor || 1;
+          }
+        } else {
+          desktopPxPerDipX = 1;
+          desktopPxPerDipY = 1;
+        }
 
         // geometry from main (DIP)
         const winBounds = await ipcRenderer.invoke('get-window-bounds');
@@ -461,16 +475,28 @@
 
         const offsetInfo = await ipcRenderer.invoke('get-window-offset');
         windowOffsetTop = offsetInfo.offsetTop || 0;
+        windowOffsetLeft = offsetInfo.offsetLeft || 0;
 
-        console.log('CLIENT: winBounds(DIP)=', winBounds, 'content(DIP)=', content, 'offsetTop=', windowOffsetTop);
+        console.log('CLIENT: winBounds(DIP)=', winBounds);
+        console.log('CLIENT: contentBounds(DIP)=', content);
+        console.log('CLIENT: offsets(DIP)=', { windowOffsetTop, windowOffsetLeft });
         console.log('CLIENT: desktop scaleFactor=', desktopScaleFactor, 'displayBounds(DIP)=', desktopDisplayBounds);
+        console.log('CLIENT: effective desktopPxPerDip=', { x: desktopPxPerDipX, y: desktopPxPerDipY }, 'capturePx=', { w: captureWidthPx, h: captureHeightPx });
 
-        // Tell agent the VIDEO coordinate system (pixels of captured stream)
-        const sendW = captureWidthPx || (captureMode === 'desktop' ? Math.round(desktopDisplayBounds.width * desktopScaleFactor) : windowWidth);
-        const sendH = captureHeightPx || (captureMode === 'desktop' ? Math.round(desktopDisplayBounds.height * desktopScaleFactor) : windowHeight);
+        // ✅ Tell agent what coordinate system to use
+        // Desktop mode: agent sends VIDEO PIXELS => send captureWidthPx/captureHeightPx
+        // App mode: agent sends WINDOW DIP => send windowWidth/windowHeight
+        let sendW, sendH;
+        if (captureMode === 'desktop') {
+          sendW = captureWidthPx || Math.round(desktopDisplayBounds.width * desktopScaleFactor);
+          sendH = captureHeightPx || Math.round(desktopDisplayBounds.height * desktopScaleFactor);
+        } else {
+          sendW = windowWidth;
+          sendH = windowHeight;
+        }
 
         socket.emit('app-dimensions', { sessionId, width: sendW, height: sendH });
-        console.log('CLIENT: sent app-dimensions to agent:', { width: sendW, height: sendH });
+        console.log('CLIENT: sent app-dimensions to agent:', { width: sendW, height: sendH, mode: captureMode });
 
         // Add tracks + offer
         localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
@@ -488,11 +514,9 @@
         console.error('startRemoteAssist failed:', err);
         setStatus('Start failed: ' + (err?.message || String(err)));
 
-        // revert UI
         document.getElementById('startRemoteBtn').disabled = false;
         document.getElementById('stopRemoteBtn').disabled = true;
 
-        // cleanup
         remoteActive = false;
         isPrimed = false;
         hideDot();
@@ -615,38 +639,46 @@
       const rawX = event.x;
       const rawY = event.y;
 
+      // Compute CONTENT coordinates in DIP (the coordinates sendInputEvent expects)
       let contentX = 0;
       let contentY = 0;
 
       if (captureMode === 'desktop') {
-        // rawX/rawY are CAPTURE PIXELS relative to display top-left
-        // Convert to GLOBAL screen DIP by adding the display origin (DIP)
-        const globalScreenDipX = desktopDisplayBounds.x + (rawX / desktopScaleFactor);
-        const globalScreenDipY = desktopDisplayBounds.y + (rawY / desktopScaleFactor);
+        // Support sends VIDEO PIXELS relative to captured DISPLAY top-left.
+        // Step 1: video px -> display-local DIP
+        // Use effective px-per-DIP computed from the actual stream size to avoid drift.
+        const displayLocalDipX = rawX / (desktopPxPerDipX || 1);
+        const displayLocalDipY = rawY / (desktopPxPerDipY || 1);
 
-        // GLOBAL screen DIP -> WINDOW DIP
+        // Step 2: display-local DIP -> global screen DIP (add display origin)
+        const globalScreenDipX = desktopDisplayBounds.x + displayLocalDipX;
+        const globalScreenDipY = desktopDisplayBounds.y + displayLocalDipY;
+
+        // Step 3: global screen DIP -> window-local DIP (subtract window global position)
         const windowDipX = globalScreenDipX - windowPosX;
         const windowDipY = globalScreenDipY - windowPosY;
 
-        // WINDOW DIP -> CONTENT DIP
-        contentX = windowDipX;
+        // Step 4: window DIP -> content DIP (subtract titlebar/left inset)
+        contentX = windowDipX - windowOffsetLeft;
         contentY = windowDipY - windowOffsetTop;
       } else {
-        // app share: rawX/rawY are WINDOW DIP
-        contentX = rawX;
+        // App share: support sends WINDOW DIP
+        contentX = rawX - windowOffsetLeft;
         contentY = rawY - windowOffsetTop;
       }
 
-      // dot should match viewport coords (sendInputEvent coords)
-      showDotViewport(contentX, contentY);
+      // Debug dot (clamped for visibility only)
+      const dotX = Math.max(0, Math.min(contentWidth, contentX));
+      const dotY = Math.max(0, Math.min(contentHeight, contentY));
+      showDotViewport(dotX, dotY);
 
-      // prime focus once and consume first event
+      // Prime focus (do NOT drop the event)
       if (!isPrimed) {
         ipcRenderer.send('focus-window');
         isPrimed = true;
-        return;
       }
 
+      // Clamp for injection safety
       const injX = Math.max(0, Math.min(contentWidth - 1, contentX));
       const injY = Math.max(0, Math.min(contentHeight - 1, contentY));
 
@@ -670,6 +702,7 @@
         lastMoveSend = now;
       }
 
+      // click/move injection
       ipcRenderer.send('remote-control-event', {
         type: 'mouse',
         subtype: event.subtype,
