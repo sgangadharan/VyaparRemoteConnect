@@ -644,32 +644,29 @@
       let contentY = 0;
 
       if (captureMode === 'desktop') {
-        // Support sends VIDEO PIXELS relative to captured DISPLAY top-left.
-        // Step 1: video px -> display-local DIP
-        // Use effective px-per-DIP computed from the actual stream size to avoid drift.
-        const displayLocalDipX = rawX / (desktopPxPerDipX || 1);
-        const displayLocalDipY = rawY / (desktopPxPerDipY || 1);
+        // rawX/rawY are CAPTURE VIDEO PIXELS relative to the captured DISPLAY's top-left.
+        // Convert capture-pixel coords -> CONTENT DIP coords directly.
 
-        // Step 2: display-local DIP -> global screen DIP (add display origin)
-        const globalScreenDipX = desktopDisplayBounds.x + displayLocalDipX;
-        const globalScreenDipY = desktopDisplayBounds.y + displayLocalDipY;
+        // Where is the window inside the captured display (in PIXELS)?
+        const winLeftPx = (windowPosX - desktopDisplayBounds.x) * desktopScaleFactor;
+        const winTopPx  = (windowPosY - desktopDisplayBounds.y) * desktopScaleFactor;
 
-        // Step 3: global screen DIP -> window-local DIP (subtract window global position)
-        const windowDipX = globalScreenDipX - windowPosX;
-        const windowDipY = globalScreenDipY - windowPosY;
+        // Where is the webContents (content) inside that window (in PIXELS)?
+        const contentLeftPx = winLeftPx + (windowOffsetLeft * desktopScaleFactor);
+        const contentTopPx  = winTopPx  + (windowOffsetTop  * desktopScaleFactor);
 
-        // Step 4: window DIP -> content DIP (subtract titlebar/left inset)
-        contentX = windowDipX - windowOffsetLeft;
-        contentY = windowDipY - windowOffsetTop;
+        // Now convert capture pixels -> content DIP
+        contentX = (rawX - contentLeftPx) / desktopScaleFactor;
+        contentY = (rawY - contentTopPx)  / desktopScaleFactor;
       } else {
-        // App share: support sends WINDOW DIP
+        // app share: rawX/rawY are WINDOW DIP
         contentX = rawX - windowOffsetLeft;
         contentY = rawY - windowOffsetTop;
       }
 
       // Debug dot (clamped for visibility only)
-      const dotX = Math.max(0, Math.min(contentWidth, contentX));
-      const dotY = Math.max(0, Math.min(contentHeight, contentY));
+      const dotX = Math.max(0, Math.min(contentWidth - 1, contentX));
+      const dotY = Math.max(0, Math.min(contentHeight - 1, contentY));
       showDotViewport(dotX, dotY);
 
       // Prime focus (do NOT drop the event)
