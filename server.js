@@ -58,6 +58,19 @@ io.on('connection', (socket) => {
       reason: 'customer_stopped'
     });
 
+  socket.on('register', ({ role, sessionId }, ack) => {
+    try {
+      socket.join(sessionId);
+      socket.data.role = role;
+      socket.data.sessionId = sessionId;
+  
+      // respond success
+      if (typeof ack === 'function') ack({ ok: true });
+    } catch (e) {
+      if (typeof ack === 'function') ack({ ok: false, error: e.message });
+    }
+  });
+
     // optional: make this socket leave the room
     socket.leave(sessionId);
   });
