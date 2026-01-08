@@ -136,12 +136,37 @@
   <script>
       // Dynamic session ID, set after Join Session
     let sessionId = null;
-      let sessionActive = false;
+    let sessionActive = false;
 
-      const socket = io(); // or io('http://135.13.10.157:4000');
+    const socket = io(); // or io('http://135.13.10.157:4000');
 
       // Recreate PC per session so agent can Leave/Join without page reload
     let pc = null;
+
+    function createPc() {
+      const newPc = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "turn:global.relay.metered.ca:80", username: "openai", credential: "openai" },
+          { urls: "turn:global.relay.metered.ca:443", username: "openai", credential: "openai" },
+          { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openai", credential: "openai" }
+        ]
+      });
+
+      newPc.onicecandidate = (event) => {
+        if (event.candidate && sessionId) {
+          socket.emit("ice-candidate", { sessionId, candidate: event.candidate });
+        }
+      };
+
+      newPc.ontrack = (event) => {
+        const [stream] = event.streams;
+        video.srcObject = stream;
+        video.play().catch(() => {});
+      };
+
+      return newPc;
+    }
 
     function createPeerConnection() {
       const newPc = new RTCPeerConnection({
@@ -237,29 +262,72 @@
         console.log("AGENT: waiting for session key before joining a room");
       });
 
-      function joinSession() {
+      async function joinSession() {
         const key = document.getElementById("agentSessionInput").value.trim();
         if (!key) {
           alert("Please enter a Session Key to join.");
-        return;
-      }
+          return;
+        }
 
         // If already in a session, do nothing
         if (sessionActive) return;
+
+        // Must be connected to Socket.IO server
+        if (!socket.connected) {
+          alert("Not connected to server yet. Please wait a second and try again.");
+          return;
+        }
+
+        // UI: show "joining..." state (but don't mark active yet)
+        joinBtn.disabled = true;
+        joinBtn.textContent = "Joining...";
+        setConnectionUI(false);        // still disconnected until ACK
+        leaveBtn.disabled = true;
 
         // Fresh PC for this session
         closePeerConnection();
         pc = createPeerConnection();
 
-        sessionId = key;
-        sessionActive = true;
-        console.log("AGENT: joining session", sessionId);
-        socket.emit("register", { role: "agent", sessionId });
+        try {
+          // Register with ACK + timeout
+          // Requires server register handler to accept (payload, ack)
+          const ack = await socket.timeout(5000).emitWithAck("register", {
+            role: "agent",
+            sessionId: key
+          });
 
-        joinBtn.disabled = true;
-        joinBtn.textContent = "Session Active";
-        leaveBtn.disabled = false;
-        setConnectionUI(true);
+          if (!ack || ack.ok !== true) {
+            throw new Error(ack?.error || "register failed");
+          }
+
+          // Only now: session is truly active
+          sessionId = key;
+          sessionActive = true;
+
+          console.log("AGENT: joined session", sessionId);
+
+          joinBtn.disabled = true;
+          joinBtn.textContent = "Session Active";
+          leaveBtn.disabled = false;
+          setConnectionUI(true);
+        } catch (err) {
+          console.error("AGENT: joinSession failed:", err);
+
+          // Roll back state
+          sessionId = null;
+          sessionActive = false;
+
+          // Cleanup pc so we don't keep a broken RTCPeerConnection around
+          closePeerConnection();
+
+          // Restore UI
+          joinBtn.disabled = false;
+          joinBtn.textContent = "Join Session";
+          leaveBtn.disabled = true;
+          setConnectionUI(false);
+
+          alert("Join failed: " + (err?.message || String(err)));
+        }
       }
 
       document.getElementById("joinSessionBtn").addEventListener("click", joinSession);

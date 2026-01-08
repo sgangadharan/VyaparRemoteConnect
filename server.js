@@ -32,16 +32,18 @@ io.on('connection', (socket) => {
     try {
       const { role, sessionId } = payload || {};
       if (!role || !sessionId) throw new Error('Missing role/sessionId');
-
+  
       socket.join(sessionId);
       socket.data.role = role;
       socket.data.sessionId = sessionId;
-
-      console.log(`Socket ${socket.id} registered as ${role} for session ${sessionId}`);
-
+  
+      // ✅ tell everyone in the session that an agent is present
+      if (role === 'agent') {
+        io.to(sessionId).emit('agent-joined', { sessionId, agentSocketId: socket.id });
+      }
+  
       if (typeof ack === 'function') ack({ ok: true });
     } catch (e) {
-      console.error('register error:', e);
       if (typeof ack === 'function') ack({ ok: false, error: e.message });
     }
   });
