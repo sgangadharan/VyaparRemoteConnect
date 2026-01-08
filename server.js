@@ -1,4 +1,5 @@
 // server.js
+const sessionState = new Map(); // sessionId -> { offer, iceFromCustomer: [], iceFromAgent: [] }
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -24,62 +25,110 @@ app.get('/support.html', (req, res) => {
 
 // --- Signaling logic (same as before) ---
 // Example skeleton; plug your existing signaling handlers here:
-io.on('connection', (socket) => {
-  console.log('Socket connected:', socket.id);
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
 
-  // ✅ Single register handler WITH ACK
-  socket.on('register', (payload, ack) => {
+  socket.on("register", ({ role, sessionId }, ack) => {
     try {
-      const { role, sessionId } = payload || {};
-      if (!role || !sessionId) throw new Error('Missing role/sessionId');
+      if (!sessionId || !role) {
+        throw new Error("Missing role or sessionId");
+      }
   
+      // Join room
       socket.join(sessionId);
       socket.data.role = role;
       socket.data.sessionId = sessionId;
   
-      // ✅ tell everyone in the session that an agent is present
-      if (role === 'agent') {
-        io.to(sessionId).emit('agent-joined', { sessionId, agentSocketId: socket.id });
+      console.log(
+        `Socket ${socket.id} registered as ${role} for session ${sessionId}`
+      );
+  
+      // Initialize session state if missing
+      if (!sessionState.has(sessionId)) {
+        sessionState.set(sessionId, {
+          offer: null,
+          iceFromCustomer: [],
+          iceFromAgent: []
+        });
       }
   
-      if (typeof ack === 'function') ack({ ok: true });
-    } catch (e) {
-      if (typeof ack === 'function') ack({ ok: false, error: e.message });
+      const state = sessionState.get(sessionId);
+  
+      // ✅ ACK BACK TO CLIENT (THIS FIXES register ACK timeout)
+      if (typeof ack === "function") {
+        ack({ ok: true });
+      }
+  
+      // 🔁 LATE-JOIN HANDLING
+  
+      // If AGENT joins AFTER customer already sent OFFER
+      if (role === "agent" && state.offer) {
+        console.log("Replaying stored OFFER to late-joining agent");
+        socket.emit("offer", { offer: state.offer });
+  
+        // Replay ICE candidates from customer
+        state.iceFromCustomer.forEach((candidate) => {
+          socket.emit("ice-candidate", { candidate });
+        });
+      }
+  
+      // If CUSTOMER joins AFTER agent already sent ICE
+      if (role === "customer" && state.iceFromAgent.length > 0) {
+        console.log("Replaying stored ICE to late-joining customer");
+        state.iceFromAgent.forEach((candidate) => {
+          socket.emit("ice-candidate", { candidate });
+        });
+      }
+  
+      // Notify peers (optional UI signal)
+      socket.to(sessionId).emit("peer-joined", { role });
+  
+    } catch (err) {
+      console.error("register failed:", err);
+  
+      if (typeof ack === "function") {
+        ack({ ok: false, error: err.message });
+      }
     }
   });
 
-  socket.on('offer', ({ sessionId, offer }) => {
-    socket.to(sessionId).emit('offer', { offer });
+  socket.on("offer", ({ sessionId, offer }) => {
+    const state = sessionState.get(sessionId);
+    if (state) {
+      state.offer = offer;
+    }
+    socket.to(sessionId).emit("offer", { offer });
   });
 
-  socket.on('answer', ({ sessionId, answer }) => {
-    socket.to(sessionId).emit('answer', { answer });
+  socket.on("answer", ({ sessionId, answer }) => {
+    socket.to(sessionId).emit("answer", { answer });
   });
 
-  socket.on('ice-candidate', ({ sessionId, candidate }) => {
-    socket.to(sessionId).emit('ice-candidate', { candidate });
+  socket.on("ice-candidate", ({ sessionId, candidate }) => {
+    const state = sessionState.get(sessionId);
+    if (!state) return;
+  
+    if (socket.data.role === "customer") {
+      state.iceFromCustomer.push(candidate);
+    } else if (socket.data.role === "agent") {
+      state.iceFromAgent.push(candidate);
+    }
+  
+    socket.to(sessionId).emit("ice-candidate", { candidate });
   });
 
-  socket.on('control-event', ({ sessionId, event }) => {
-    socket.to(sessionId).emit('control-event', { event });
+  socket.on("control-event", ({ sessionId, event }) => {
+    socket.to(sessionId).emit("control-event", { event });
   });
 
-  // ✅ end-session from customer
-  socket.on('end-session', ({ sessionId }) => {
-    console.log(`Ending session ${sessionId} on request of client`);
-
-    io.to(sessionId).emit('session-ended', {
+  socket.on("end-session", ({ sessionId }) => {
+    console.log(`Ending session ${sessionId}`);
+    sessionState.delete(sessionId);
+  
+    io.to(sessionId).emit("session-ended", {
       sessionId,
-      reason: 'customer_stopped'
+      reason: "customer_stopped"
     });
-
-    // customer socket leaves the room
-    socket.leave(sessionId);
-  });
-
-  // Optional: helpful cleanup log
-  socket.on('disconnect', (reason) => {
-    console.log('Socket disconnected:', socket.id, reason);
   });
 });
 // io.on('connection', (socket) => {
