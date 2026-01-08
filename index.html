@@ -854,34 +854,31 @@
   const MOVE_SEND_THROTTLE_MS = 16; // 60fps injection throttle
 
   socket.on('control-event', ({ event }) => {
-    if (!remoteActive) return;
-
-    if (event.type === 'keyboard') {
-      handleRemoteKeyboard(event);
+    // IMPORTANT: do not drop events just because remoteActive isn't true yet.
+    // If the event arrives, we should render the dot and (optionally) inject.
+    if (!event || event.type !== 'mouse') {
+      if (event?.type === 'keyboard') handleRemoteKeyboard(event);
       return;
     }
-    if (event.type !== 'mouse') return;
+
+    // You can keep injection gated, but NEVER gate dot rendering.
+    const allowInject = remoteActive; // or true if you want always-on injection
 
     const rawX = event.x;
     const rawY = event.y;
 
-    // Compute CONTENT coordinates in DIP (the coordinates sendInputEvent expects)
     let contentX = 0;
     let contentY = 0;
 
     if (captureMode === 'desktop') {
-      // rawX/rawY are CAPTURE VIDEO PIXELS relative to the captured DISPLAY's top-left.
-      // Convert capture-pixel coords -> CONTENT DIP coords directly.
+      // rawX/rawY are CAPTURE VIDEO PIXELS relative to captured DISPLAY top-left
 
-      // Where is the window inside the captured display (in PIXELS)?
       const winLeftPx = (windowPosX - desktopDisplayBounds.x) * desktopScaleFactor;
       const winTopPx  = (windowPosY - desktopDisplayBounds.y) * desktopScaleFactor;
 
-      // Where is the webContents (content) inside that window (in PIXELS)?
       const contentLeftPx = winLeftPx + (windowOffsetLeft * desktopScaleFactor);
       const contentTopPx  = winTopPx  + (windowOffsetTop  * desktopScaleFactor);
 
-      // Now convert capture pixels -> content DIP
       contentX = (rawX - contentLeftPx) / desktopScaleFactor;
       contentY = (rawY - contentTopPx)  / desktopScaleFactor;
     } else {
@@ -890,22 +887,24 @@
       contentY = rawY - windowOffsetTop;
     }
 
-    // Debug dot (clamped for visibility only)
+    // ✅ ALWAYS show dot (even before primed / before remoteActive)
     const dotX = Math.max(0, Math.min(contentWidth - 1, contentX));
     const dotY = Math.max(0, Math.min(contentHeight - 1, contentY));
     showDotViewport(dotX, dotY);
 
-    // Prime focus (do NOT drop the event)
+    // Prime focus once (but DO NOT return; don't drop event)
     if (!isPrimed) {
       ipcRenderer.send('focus-window');
       isPrimed = true;
     }
 
+    // If you want dot-only until fully active, stop here:
+    if (!allowInject) return;
+
     // Clamp for injection safety
     const injX = Math.max(0, Math.min(contentWidth - 1, contentX));
     const injY = Math.max(0, Math.min(contentHeight - 1, contentY));
 
-    // wheel
     if (event.subtype === 'mouseWheel') {
       ipcRenderer.send('remote-control-event', {
         type: 'mouse',
@@ -918,14 +917,6 @@
       return;
     }
 
-    // throttle move injection only
-    if (event.subtype === 'mouseMove') {
-      const now = performance.now();
-      if (now - lastMoveSend < MOVE_SEND_THROTTLE_MS) return;
-      lastMoveSend = now;
-    }
-
-    // click/move injection
     ipcRenderer.send('remote-control-event', {
       type: 'mouse',
       subtype: event.subtype,
