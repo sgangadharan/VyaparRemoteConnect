@@ -624,134 +624,123 @@
     
     // ---------------------------
     async function startRemoteAssist() {
-    try {
-      setStatus('Connecting to server...');
-      remoteActive = false;
-      isPrimed = false;
-      hideDot();
+  try {
+    setStatus('Connecting to server...');
+    remoteActive = false;
+    isPrimed = false;
+    hideDot();
 
-      // UI guard
-      document.getElementById('startRemoteBtn').disabled = true;
-      document.getElementById('stopRemoteBtn').disabled = true;
+    const startBtn = document.getElementById('startRemoteBtn');
+    const stopBtn  = document.getElementById('stopRemoteBtn');
 
-      // Must be connected
-      if (!socket || !socket.connected) {
-        throw new Error('Cannot connect to server. Is it running?');
-      }
+    // UI guard
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
 
-      // cleanup any previous
-      if (pc) { try { pc.close(); } catch {} pc = null; }
-      if (localStream) { try { localStream.getTracks().forEach(t => t.stop()); } catch {} localStream = null; }
+    // Must be connected (don’t just check once; allow a short wait)
+    if (!socket) throw new Error('Socket not initialized');
 
-      pc = createPeerConnection();
-
-      const inputVal = document.getElementById('sessionIdInput').value.trim();
-      if (!inputVal) {
-        throw new Error('Please enter a Session Key before starting remote assist.');
-      }
-
-      sessionId = inputVal;
-
-      // ✅ 1) Register must succeed (ACK)
-      setStatus('Registering session...');
-      await emitWithAck('register', { role: 'customer', sessionId }, 2500);
-
-      // Decide capture mode
-      captureMode = shareModeSelect.value;
-      refreshShareWarning();
-
-      // capture stream
-      setStatus('Starting capture...');
-      if (captureMode === 'desktop') {
-        localStream = await getDesktopStreamForWindow();
-      } else {
-        localStream = await getAppWindowStream();
-        desktopScaleFactor = 1;
-        desktopDisplayBounds = { x: 0, y: 0, width: 0, height: 0 };
-      }
-
-      readCapturePxFromStream(localStream);
-
-      // geometry from main (DIP)
-      setStatus('Reading window geometry...');
-      const winBounds = await ipcRenderer.invoke('get-window-bounds');
-      windowPosX = winBounds.x;
-      windowPosY = winBounds.y;
-      windowWidth = winBounds.width;
-      windowHeight = winBounds.height;
-
-      const content = await ipcRenderer.invoke('get-content-bounds');
-      contentWidth = content.width;
-      contentHeight = content.height;
-
-      const offsetInfo = await ipcRenderer.invoke('get-window-offset');
-      windowOffsetTop = offsetInfo.offsetTop || 0;
-      windowOffsetLeft = offsetInfo.offsetLeft || 0;
-
-      // Tell agent dimensions
-      let sendW, sendH;
-      if (captureMode === 'desktop') {
-        sendW = captureWidthPx || Math.round(desktopDisplayBounds.width * desktopScaleFactor);
-        sendH = captureHeightPx || Math.round(desktopDisplayBounds.height * desktopScaleFactor);
-      } else {
-        sendW = windowWidth;
-        sendH = windowHeight;
-      }
-
-      // ✅ 2) also ACK app-dimensions (optional; needs server support, but safe)
-      // If your server doesn’t ack this event, you can keep it as normal emit.
-      try {
-        await emitWithAck('app-dimensions', { sessionId, width: sendW, height: sendH }, 1500);
-      } catch {
-        socket.emit('app-dimensions', { sessionId, width: sendW, height: sendH });
-      }
-
-      // 1) register WITH ACK (important)
-      const regAck = await socket.timeout(5000).emitWithAck('register', { role: 'customer', sessionId });
-      if (!regAck?.ok) throw new Error(regAck?.error || 'register failed');
-
-      // 2) wait for agent
-      await waitForAgentJoined(sessionId, 15000);
-
-      // Add tracks + offer
-      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
-
-      setStatus('Creating offer...');
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // ✅ 3) Emit offer (ACK optional)
-      try {
-        await emitWithAck('offer', { sessionId, offer }, 1500);
-      } catch {
-        socket.emit('offer', { sessionId, offer });
-      }
-
-      // ✅ 4) Wait for answer so we know signaling is alive
-      setStatus('Waiting for support agent to join...');
-      await waitForAnswer(8000);
-
-      // Now we can mark active
-      remoteActive = true;
-      document.getElementById('stopRemoteBtn').disabled = false;
-      setStatus('Remote assist started. Support can now see your screen/app.');
-    } catch (err) {
-      console.error('startRemoteAssist failed:', err);
-
-      // cleanup
-      remoteActive = false;
-      isPrimed = false;
-      hideDot();
-
-      if (pc) { try { pc.close(); } catch {} pc = null; }
-      if (localStream) { try { localStream.getTracks().forEach(t => t.stop()); } catch {} localStream = null; }
-
-      document.getElementById('startRemoteBtn').disabled = false;
-      document.getElementById('stopRemoteBtn').disabled = true;
-
-      setStatus('Start failed: ' + (err?.message || String(err)));
+    if (!socket.connected) {
+      // If you want, you can force connect:
+      // socket.connect();
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('Cannot connect to server. Is it running?')), 2500);
+        socket.once('connect', () => { clearTimeout(t); resolve(); });
+        socket.once('connect_error', (e) => { clearTimeout(t); reject(new Error(e?.message || 'connect_error')); });
+      });
     }
+
+    // Cleanup any previous session
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+    if (localStream) { try { localStream.getTracks().forEach(t => t.stop()); } catch {} localStream = null; }
+
+    pc = createPeerConnection();
+
+    const inputVal = document.getElementById('sessionIdInput').value.trim();
+    if (!inputVal) throw new Error('Please enter a Session Key before starting remote assist.');
+    sessionId = inputVal;
+
+    // 1) Register ONCE (ACK)
+    setStatus('Registering session...');
+    const regAck = await socket.timeout(5000).emitWithAck('register', { role: 'customer', sessionId });
+    if (!regAck?.ok) throw new Error(regAck?.error || 'register failed');
+
+    // Decide capture mode
+    captureMode = shareModeSelect.value;
+    refreshShareWarning();
+
+    // 2) Start capture
+    setStatus('Starting capture...');
+    if (captureMode === 'desktop') {
+      localStream = await getDesktopStreamForWindow();
+    } else {
+      localStream = await getAppWindowStream();
+      desktopScaleFactor = 1;
+      desktopDisplayBounds = { x: 0, y: 0, width: 0, height: 0 };
+    }
+    readCapturePxFromStream(localStream);
+
+    // 3) Read window geometry
+    setStatus('Reading window geometry...');
+    const winBounds = await ipcRenderer.invoke('get-window-bounds');
+    windowPosX = winBounds.x;
+    windowPosY = winBounds.y;
+    windowWidth = winBounds.width;
+    windowHeight = winBounds.height;
+
+    const content = await ipcRenderer.invoke('get-content-bounds');
+    contentWidth = content.width;
+    contentHeight = content.height;
+
+    const offsetInfo = await ipcRenderer.invoke('get-window-offset');
+    windowOffsetTop = offsetInfo.offsetTop || 0;
+    windowOffsetLeft = offsetInfo.offsetLeft || 0;
+
+    // 4) Tell agent dimensions (NO ACK unless server supports it)
+    let sendW, sendH;
+    if (captureMode === 'desktop') {
+      sendW = captureWidthPx || Math.round(desktopDisplayBounds.width * desktopScaleFactor);
+      sendH = captureHeightPx || Math.round(desktopDisplayBounds.height * desktopScaleFactor);
+    } else {
+      sendW = windowWidth;
+      sendH = windowHeight;
+    }
+    socket.emit('app-dimensions', { sessionId, width: sendW, height: sendH });
+
+    // 5) Add tracks
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    // 6) Create + send offer
+    setStatus('Creating offer...');
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    socket.emit('offer', { sessionId, offer });
+
+    // 7) Wait for answer (this is the real “agent connected” signal)
+    setStatus('Waiting for support agent...');
+    await waitForAnswer(15000); // give it more time than 8s
+
+    // Active!
+    remoteActive = true;
+    stopBtn.disabled = false;
+    setStatus('Remote assist started. Support can now see your screen/app.');
+  } catch (err) {
+    console.error('startRemoteAssist failed:', err);
+
+    remoteActive = false;
+    isPrimed = false;
+    hideDot();
+
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+    if (localStream) { try { localStream.getTracks().forEach(t => t.stop()); } catch {} localStream = null; }
+
+    document.getElementById('startRemoteBtn').disabled = false;
+    document.getElementById('stopRemoteBtn').disabled = true;
+
+    setStatus('Start failed: ' + (err?.message || String(err)));
   }
+}
 
   // ---------------------------
   // Stop remote assist

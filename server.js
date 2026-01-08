@@ -23,6 +23,17 @@ app.get('/support.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'support.html'));
 });
 
+function ensureState(sessionId) {
+  if (!sessionState.has(sessionId)) {
+    sessionState.set(sessionId, {
+      offer: null,
+      iceFromCustomer: [],
+      iceFromAgent: []
+    });
+  }
+  return sessionState.get(sessionId);
+}
+
 // --- Signaling logic (same as before) ---
 // Example skeleton; plug your existing signaling handlers here:
 io.on("connection", (socket) => {
@@ -30,105 +41,71 @@ io.on("connection", (socket) => {
 
   socket.on("register", ({ role, sessionId }, ack) => {
     try {
-      if (!sessionId || !role) {
-        throw new Error("Missing role or sessionId");
-      }
-  
-      // Join room
+      if (!role || !sessionId) throw new Error("Missing role or sessionId");
+
       socket.join(sessionId);
       socket.data.role = role;
       socket.data.sessionId = sessionId;
-  
-      console.log(
-        `Socket ${socket.id} registered as ${role} for session ${sessionId}`
-      );
-  
-      // Initialize session state if missing
-      if (!sessionState.has(sessionId)) {
-        sessionState.set(sessionId, {
-          offer: null,
-          iceFromCustomer: [],
-          iceFromAgent: []
-        });
-      }
-  
-      const state = sessionState.get(sessionId);
-  
-      // ✅ ACK BACK TO CLIENT (THIS FIXES register ACK timeout)
-      if (typeof ack === "function") {
-        ack({ ok: true });
-      }
-  
-      // 🔁 LATE-JOIN HANDLING
-  
-      // If AGENT joins AFTER customer already sent OFFER
+
+      console.log(`Socket ${socket.id} registered as ${role} for session ${sessionId}`);
+
+      const state = ensureState(sessionId);
+
+      // ✅ ACK
+      if (typeof ack === "function") ack({ ok: true });
+
+      // ✅ Replay for late join
       if (role === "agent" && state.offer) {
-        console.log("Replaying stored OFFER to late-joining agent");
+        console.log("Replaying stored OFFER to agent");
         socket.emit("offer", { offer: state.offer });
-  
-        // Replay ICE candidates from customer
-        state.iceFromCustomer.forEach((candidate) => {
-          socket.emit("ice-candidate", { candidate });
-        });
+        state.iceFromCustomer.forEach((c) => socket.emit("ice-candidate", { candidate: c }));
       }
-  
-      // If CUSTOMER joins AFTER agent already sent ICE
-      if (role === "customer" && state.iceFromAgent.length > 0) {
-        console.log("Replaying stored ICE to late-joining customer");
-        state.iceFromAgent.forEach((candidate) => {
-          socket.emit("ice-candidate", { candidate });
-        });
+
+      if (role === "customer" && state.iceFromAgent.length) {
+        console.log("Replaying stored ICE to customer");
+        state.iceFromAgent.forEach((c) => socket.emit("ice-candidate", { candidate: c }));
       }
-  
-      // Notify peers (optional UI signal)
+
       socket.to(sessionId).emit("peer-joined", { role });
-  
-    } catch (err) {
-      console.error("register failed:", err);
-  
-      if (typeof ack === "function") {
-        ack({ ok: false, error: err.message });
-      }
+    } catch (e) {
+      console.error("register failed:", e);
+      if (typeof ack === "function") ack({ ok: false, error: e.message });
     }
   });
 
   socket.on("offer", ({ sessionId, offer }) => {
-    const state = sessionState.get(sessionId);
-    if (state) {
-      state.offer = offer;
-    }
+    if (!sessionId || !offer) return;
+    const state = ensureState(sessionId);
+    state.offer = offer; // ✅ store always
+    console.log("SERVER: stored offer for session", sessionId);
     socket.to(sessionId).emit("offer", { offer });
   });
 
   socket.on("answer", ({ sessionId, answer }) => {
+    if (!sessionId || !answer) return;
+    console.log("SERVER: forwarding answer for session", sessionId);
     socket.to(sessionId).emit("answer", { answer });
   });
 
   socket.on("ice-candidate", ({ sessionId, candidate }) => {
-    const state = sessionState.get(sessionId);
-    if (!state) return;
-  
-    if (socket.data.role === "customer") {
-      state.iceFromCustomer.push(candidate);
-    } else if (socket.data.role === "agent") {
-      state.iceFromAgent.push(candidate);
-    }
-  
+    if (!sessionId || !candidate) return;
+    const state = ensureState(sessionId);
+
+    if (socket.data.role === "customer") state.iceFromCustomer.push(candidate);
+    else if (socket.data.role === "agent") state.iceFromAgent.push(candidate);
+
     socket.to(sessionId).emit("ice-candidate", { candidate });
   });
 
-  socket.on("control-event", ({ sessionId, event }) => {
-    socket.to(sessionId).emit("control-event", { event });
+  socket.on("end-session", ({ sessionId }) => {
+    if (!sessionId) return;
+    console.log("SERVER: ending session", sessionId);
+    sessionState.delete(sessionId);
+    io.to(sessionId).emit("session-ended", { sessionId, reason: "customer_stopped" });
   });
 
-  socket.on("end-session", ({ sessionId }) => {
-    console.log(`Ending session ${sessionId}`);
-    sessionState.delete(sessionId);
-  
-    io.to(sessionId).emit("session-ended", {
-      sessionId,
-      reason: "customer_stopped"
-    });
+  socket.on("disconnect", () => {
+    // optional logging
   });
 });
 // io.on('connection', (socket) => {
