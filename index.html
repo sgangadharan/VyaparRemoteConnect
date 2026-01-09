@@ -474,27 +474,27 @@
     // ---------------------------
     // Wait for agent to join
     // ---------------------------
-    function waitForAgentJoined(sessionId, timeoutMs = 15000) {
-      return new Promise((resolve, reject) => {
-        const t = setTimeout(() => {
-          cleanup();
-          reject(new Error('Timed out waiting for agent to join'));
-        }, timeoutMs);
+    // function waitForAgentJoined(sessionId, timeoutMs = 15000) {
+    //   return new Promise((resolve, reject) => {
+    //     const t = setTimeout(() => {
+    //       cleanup();
+    //       reject(new Error('Timed out waiting for agent to join'));
+    //     }, timeoutMs);
 
-        function handler(msg) {
-          if (msg?.sessionId !== sessionId) return;
-          cleanup();
-          resolve(msg);
-        }
+    //     function handler(msg) {
+    //       if (msg?.sessionId !== sessionId) return;
+    //       cleanup();
+    //       resolve(msg);
+    //     }
 
-        function cleanup() {
-          clearTimeout(t);
-          socket.off('agent-joined', handler);
-        }
+    //     function cleanup() {
+    //       clearTimeout(t);
+    //       socket.off('agent-joined', handler);
+    //     }
 
-        socket.on('agent-joined', handler);
-      });
-    }
+    //     socket.on('agent-joined', handler);
+    //   });
+    // }
 
     // ---------------------------
     // Start remote assist
@@ -854,6 +854,7 @@
   const MOVE_SEND_THROTTLE_MS = 16; // 60fps injection throttle
 
   socket.on('control-event', ({ event }) => {
+    console.log('CLIENT: received control-event', event); // log the event from support.html.
     // IMPORTANT: do not drop events just because remoteActive isn't true yet.
     // If the event arrives, we should render the dot and (optionally) inject.
     if (!event || event.type !== 'mouse') {
