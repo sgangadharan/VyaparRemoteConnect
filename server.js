@@ -1,6 +1,6 @@
 // server.js
 const sessionState = new Map(); 
-// sessionId -> { offer, appDimensions, iceFromCustomer: [], iceFromAgent: [] }
+// sessionId -> { offer, appDimensions, iceFromCustomer: [], iceFromAgent: [], customerSocketId: null, agentSocketId: null }
 
 const express = require('express');
 const http = require('http');
@@ -26,10 +26,24 @@ function ensureState(sessionId) {
       offer: null,
       appDimensions: null, // { width, height }
       iceFromCustomer: [],
-      iceFromAgent: []
+      iceFromAgent: [],
+      customerSocketId: null,
+      agentSocketId: null,
+      offerSequence: 0 // Track offer sequence to detect new offers
     });
   }
   return sessionState.get(sessionId);
+}
+
+function clearCustomerState(sessionId) {
+  const state = sessionState.get(sessionId);
+  if (state) {
+    console.log(`[SERVER] Clearing customer state for session ${sessionId} (reconnection detected)`);
+    state.offer = null;
+    state.iceFromCustomer = [];
+    state.customerSocketId = null;
+    state.offerSequence++;
+  }
 }
 
 // Helper: safe ack
@@ -48,13 +62,31 @@ io.on('connection', (socket) => {
     try {
       if (!role || !sessionId) throw new Error('Missing role or sessionId');
 
+      const state = ensureState(sessionId);
+
+      // ✅ Detect customer reconnection - clear old state
+      if (role === 'customer' && state.customerSocketId && state.customerSocketId !== socket.id) {
+        console.log(`[SERVER] 🔄 Customer reconnection detected for session ${sessionId}`);
+        console.log(`[SERVER] Old socket: ${state.customerSocketId}, New socket: ${socket.id}`);
+        clearCustomerState(sessionId);
+        // Notify agent that customer reconnected
+        if (state.agentSocketId) {
+          io.to(state.agentSocketId).emit('customer-reconnected', { sessionId });
+        }
+      }
+
       socket.join(sessionId);
       socket.data.role = role;
       socket.data.sessionId = sessionId;
 
-      console.log(`Socket ${socket.id} registered as ${role} for session ${sessionId}`);
+      // Track socket IDs for reconnection detection
+      if (role === 'customer') {
+        state.customerSocketId = socket.id;
+      } else if (role === 'agent') {
+        state.agentSocketId = socket.id;
+      }
 
-      const state = ensureState(sessionId);
+      console.log(`[SERVER] Socket ${socket.id} registered as ${role} for session ${sessionId}`);
 
       // ✅ ACK success
       ackOk(ack);
@@ -65,15 +97,16 @@ io.on('connection', (socket) => {
           socket.emit('app-dimensions', state.appDimensions);
         }
         if (state.offer) {
-          console.log('Replaying stored OFFER to agent');
-          socket.emit('offer', { offer: state.offer });
+          console.log(`[SERVER] Replaying stored OFFER (sequence: ${state.offerSequence}) to agent`);
+          socket.emit('offer', { offer: state.offer, isNewOffer: false, sequence: state.offerSequence });
+          // Only replay recent ICE candidates (from current connection)
           state.iceFromCustomer.forEach((c) => socket.emit('ice-candidate', { candidate: c }));
         }
       }
 
       if (role === 'customer') {
         if (state.iceFromAgent.length) {
-          console.log('Replaying stored ICE to customer');
+          console.log(`[SERVER] Replaying ${state.iceFromAgent.length} stored ICE candidates to customer`);
           state.iceFromAgent.forEach((c) => socket.emit('ice-candidate', { candidate: c }));
         }
       }
@@ -81,7 +114,7 @@ io.on('connection', (socket) => {
       // Useful UI signal (optional)
       socket.to(sessionId).emit('peer-joined', { role, sessionId });
     } catch (e) {
-      console.error('register failed:', e);
+      console.error('[SERVER] register failed:', e);
       ackFail(ack, e.message);
     }
   });
@@ -98,7 +131,7 @@ io.on('connection', (socket) => {
 
       ackOk(ack);
     } catch (e) {
-      console.error('app-dimensions failed:', e);
+      console.error('[SERVER] app-dimensions failed:', e);
       ackFail(ack, e.message);
     }
   });
@@ -107,13 +140,32 @@ io.on('connection', (socket) => {
     try {
       if (!sessionId || !offer) throw new Error('Missing sessionId or offer');
       const state = ensureState(sessionId);
-      state.offer = offer; // ✅ store for late-joining agent
-      console.log('SERVER: stored offer for session', sessionId);
+      
+      // Check if this is a new offer (customer reconnected)
+      const isNewOffer = state.offer !== null && state.offerSequence > 0;
+      
+      // Store new offer and increment sequence
+      state.offer = offer;
+      state.offerSequence++;
+      
+      // Clear old customer ICE candidates when new offer arrives (reconnection)
+      if (isNewOffer) {
+        console.log(`[SERVER] 🔄 New offer received (sequence: ${state.offerSequence}) - clearing old customer ICE candidates`);
+        state.iceFromCustomer = [];
+      }
+      
+      console.log(`[SERVER] Stored offer for session ${sessionId} (sequence: ${state.offerSequence}, isNew: ${isNewOffer})`);
 
-      socket.to(sessionId).emit('offer', { offer });
+      // Forward to agent with sequence info so they know it's a new offer
+      socket.to(sessionId).emit('offer', { 
+        offer, 
+        isNewOffer: isNewOffer,
+        sequence: state.offerSequence 
+      });
+      
       ackOk(ack);
     } catch (e) {
-      console.error('offer failed:', e);
+      console.error('[SERVER] offer failed:', e);
       ackFail(ack, e.message);
     }
   });
@@ -121,12 +173,12 @@ io.on('connection', (socket) => {
   socket.on('answer', ({ sessionId, answer }, ack) => {
     try {
       if (!sessionId || !answer) throw new Error('Missing sessionId or answer');
-      console.log('SERVER: forwarding answer for session', sessionId);
+      console.log(`[SERVER] Forwarding answer for session ${sessionId}`);
 
       socket.to(sessionId).emit('answer', { answer });
       ackOk(ack);
     } catch (e) {
-      console.error('answer failed:', e);
+      console.error('[SERVER] answer failed:', e);
       ackFail(ack, e.message);
     }
   });
@@ -136,13 +188,18 @@ io.on('connection', (socket) => {
       if (!sessionId || !candidate) throw new Error('Missing sessionId or candidate');
       const state = ensureState(sessionId);
 
-      if (socket.data.role === 'customer') state.iceFromCustomer.push(candidate);
-      else if (socket.data.role === 'agent') state.iceFromAgent.push(candidate);
+      // Store ICE candidates (only for current connection)
+      if (socket.data.role === 'customer') {
+        state.iceFromCustomer.push(candidate);
+      } else if (socket.data.role === 'agent') {
+        state.iceFromAgent.push(candidate);
+      }
 
+      // Forward to the other peer
       socket.to(sessionId).emit('ice-candidate', { candidate });
       ackOk(ack);
     } catch (e) {
-      console.error('ice-candidate failed:', e);
+      console.error('[SERVER] ice-candidate failed:', e);
       ackFail(ack, e.message);
     }
   });
@@ -178,12 +235,31 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', (reason) => {
-    // optional logging
-    // console.log('Socket disconnected:', socket.id, reason);
+    const role = socket.data.role;
+    const sessionId = socket.data.sessionId;
+    
+    if (sessionId) {
+      const state = sessionState.get(sessionId);
+      if (state) {
+        // If customer disconnects, clear their state (they'll reconnect)
+        if (role === 'customer' && state.customerSocketId === socket.id) {
+          console.log(`[SERVER] Customer disconnected from session ${sessionId}, reason: ${reason}`);
+          console.log(`[SERVER] State will be cleared when customer reconnects with new offer`);
+          // Don't clear immediately - wait for reconnection
+          // The new offer will trigger cleanup
+        } else if (role === 'agent' && state.agentSocketId === socket.id) {
+          console.log(`[SERVER] Agent disconnected from session ${sessionId}, reason: ${reason}`);
+          state.agentSocketId = null;
+        }
+      }
+    }
   });
 });
 
 const PORT = 4000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Signaling server listening on http://0.0.0.0:${PORT}`);
+server.listen(PORT, 'localhost', () => {
+  console.log(`[SERVER] ========================================`);
+  console.log(`[SERVER] Signaling server listening on http://localhost:${PORT}`);
+  console.log(`[SERVER] Reconnection handling: ENABLED`);
+  console.log(`[SERVER] ========================================`);
 });
