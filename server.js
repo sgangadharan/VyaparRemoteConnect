@@ -257,7 +257,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = 4000;
-server.listen(PORT, 'localhost', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`[SERVER] ========================================`);
   console.log(`[SERVER] Signaling server listening on http://localhost:${PORT}`);
   console.log(`[SERVER] Reconnection handling: ENABLED`);
