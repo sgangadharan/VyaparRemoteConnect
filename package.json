@@ -1,10 +1,12 @@
 {
-  "name": "electron-hello-world",
+  "name": "VyaparRemoteAssistance",
   "version": "1.0.0",
-  "description": "",
+  "description": "Vyapar Remote Assistance",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "node server_appservice.js",
+    "electron": "electron .",
+    "dev": "concurrently \"npm run start\" \"npm run electron\""
   },
   "keywords": [],
   "author": "",
@@ -16,6 +18,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "concurrently": "^9.0.0"
   }
 }

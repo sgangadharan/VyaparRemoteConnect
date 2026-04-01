@@ -29,7 +29,8 @@ function ensureState(sessionId) {
       iceFromAgent: [],
       customerSocketId: null,
       agentSocketId: null,
-      offerSequence: 0 // Track offer sequence to detect new offers
+      offerSequence: 0, // Track offer sequence to detect new offers
+      cleanupTimer: null // Timer for customer timeout - have to initialize
     });
   }
   return sessionState.get(sessionId);
@@ -41,6 +42,7 @@ function clearCustomerState(sessionId) {
     console.log(`[SERVER] Clearing customer state for session ${sessionId} (reconnection detected)`);
     state.offer = null;
     state.iceFromCustomer = [];
+    state.iceFromAgent = []; // Also clear stale agent ICE — agent PC resets too
     state.customerSocketId = null;
     state.offerSequence++;
   }
@@ -68,6 +70,11 @@ io.on('connection', (socket) => {
       if (role === 'customer' && state.customerSocketId && state.customerSocketId !== socket.id) {
         console.log(`[SERVER] 🔄 Customer reconnection detected for session ${sessionId}`);
         console.log(`[SERVER] Old socket: ${state.customerSocketId}, New socket: ${socket.id}`);
+        // Cancel any pending cleanup timer from a previous disconnect
+        if (state.cleanupTimer) {
+          clearTimeout(state.cleanupTimer);
+          state.cleanupTimer = null;
+        }
         clearCustomerState(sessionId);
         // Notify agent that customer reconnected
         if (state.agentSocketId) {
@@ -156,11 +163,19 @@ io.on('connection', (socket) => {
       
       console.log(`[SERVER] Stored offer for session ${sessionId} (sequence: ${state.offerSequence}, isNew: ${isNewOffer})`);
 
+      // When this is a reconnect offer, send peer-reset to the agent FIRST.
+      // Socket.IO guarantees FIFO ordering on a single connection, so peer-reset
+      // always arrives and is processed before the offer — no race condition.
+      if (isNewOffer && state.agentSocketId) {
+        console.log(`[SERVER] 🔄 Sending peer-reset to agent before new offer (sequence: ${state.offerSequence})`);
+        io.to(state.agentSocketId).emit('peer-reset', { sessionId });
+      }
+
       // Forward to agent with sequence info so they know it's a new offer
-      socket.to(sessionId).emit('offer', { 
-        offer, 
+      socket.to(sessionId).emit('offer', {
+        offer,
         isNewOffer: isNewOffer,
-        sequence: state.offerSequence 
+        sequence: state.offerSequence
       });
       
       ackOk(ack);
@@ -244,9 +259,15 @@ io.on('connection', (socket) => {
         // If customer disconnects, clear their state (they'll reconnect)
         if (role === 'customer' && state.customerSocketId === socket.id) {
           console.log(`[SERVER] Customer disconnected from session ${sessionId}, reason: ${reason}`);
-          console.log(`[SERVER] State will be cleared when customer reconnects with new offer`);
-          // Don't clear immediately - wait for reconnection
-          // The new offer will trigger cleanup
+          state.customerSocketId = null;
+          // Schedule cleanup in case customer never reconnects (crash, closed tab, etc.)
+          state.cleanupTimer = setTimeout(() => {
+            if (!state.customerSocketId) {
+              console.log(`[SERVER] Session ${sessionId} expired — cleaning up`);
+              io.to(sessionId).emit('session-ended', { sessionId, reason: 'customer_timeout' });
+              sessionState.delete(sessionId);
+            }
+          }, 60000); // 60-second grace period for reconnection
         } else if (role === 'agent' && state.agentSocketId === socket.id) {
           console.log(`[SERVER] Agent disconnected from session ${sessionId}, reason: ${reason}`);
           state.agentSocketId = null;
@@ -256,10 +277,10 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 4000;
-server.listen(PORT, 'localhost', () => {
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
   console.log(`[SERVER] ========================================`);
-  console.log(`[SERVER] Signaling server listening on http://localhost:${PORT}`);
+  console.log(`[SERVER] Signaling server listening on port ${PORT}`);
   console.log(`[SERVER] Reconnection handling: ENABLED`);
   console.log(`[SERVER] ========================================`);
 });
