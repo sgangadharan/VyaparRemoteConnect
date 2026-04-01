@@ -1,0 +1,13 @@
+{
+  "name": "VyaparRemoteAssistance",
+  "version": "1.0.0",
+  "description": "Vyapar Remote Assistance",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server_appservice.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  }
+}
